@@ -13,7 +13,6 @@ dp = Dispatcher()
 
 client = OpenAI(api_key=OPENAI_API_KEY)
 
-# Сохраняем последнее фото пользователя
 user_photos = {}
 
 
@@ -24,10 +23,10 @@ async def handle_message(message: types.Message):
     if message.photo:
         photo = message.photo[-1]
         file = await bot.get_file(photo.file_id)
-        file_path = file.file_path
+        downloaded_file = await bot.download_file(file.file_path)
 
-        file_url = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file_path}"
-        user_photos[message.from_user.id] = file_url
+        image_bytes = downloaded_file.read()
+        user_photos[message.from_user.id] = image_bytes
 
         await message.answer("Фото получено 📸\nТеперь отправьте текст с описанием образа.")
         return
@@ -37,14 +36,16 @@ async def handle_message(message: types.Message):
         prompt = message.text
         user_id = message.from_user.id
 
-        # Если есть сохранённое фото — делаем редактирование
+        # Если есть фото — делаем редактирование
         if user_id in user_photos:
-            image_url = user_photos[user_id]
+            original_image = user_photos[user_id]
+
+            image_base64 = base64.b64encode(original_image).decode("utf-8")
 
             result = client.images.generate(
                 model="gpt-image-1",
                 prompt=prompt,
-                image=image_url,
+                image=image_base64,
                 size="1024x1024"
             )
 
@@ -58,10 +59,10 @@ async def handle_message(message: types.Message):
                 size="1024x1024"
             )
 
-        image_base64 = result.data[0].b64_json
-        image_bytes = base64.b64decode(image_base64)
+        output_base64 = result.data[0].b64_json
+        output_bytes = base64.b64decode(output_base64)
 
-        photo = BufferedInputFile(image_bytes, filename="image.png")
+        photo = BufferedInputFile(output_bytes, filename="image.png")
 
         await message.answer_photo(photo)
 
