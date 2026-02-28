@@ -1,6 +1,5 @@
 import asyncio
 import os
-import base64
 from aiogram import Bot, Dispatcher, types
 from aiogram.types import BufferedInputFile
 from openai import OpenAI
@@ -10,17 +9,16 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
-
 client = OpenAI(api_key=OPENAI_API_KEY)
 
-# Храним фото пользователя временно
+# временно храним фото пользователя
 user_photos = {}
 
 
 @dp.message()
 async def handle_message(message: types.Message):
 
-    # Если отправлено фото
+    # 1️⃣ Если пришло фото
     if message.photo:
         photo = message.photo[-1]
         file = await bot.get_file(photo.file_id)
@@ -32,7 +30,7 @@ async def handle_message(message: types.Message):
         await message.answer("Фото получено 📸\nТеперь отправьте текст с описанием образа.")
         return
 
-    # Если отправлен текст
+    # 2️⃣ Если пришёл текст
     if message.text:
         prompt = message.text
         user_id = message.from_user.id
@@ -40,39 +38,37 @@ async def handle_message(message: types.Message):
         # Если есть сохранённое фото → редактируем
         if user_id in user_photos:
             original_image = user_photos[user_id]
-            image_base64 = base64.b64encode(original_image).decode("utf-8")
 
             result = client.images.generate(
                 model="gpt-image-1",
                 prompt=prompt,
-                input_image=image_base64,
+                input_image=original_image,
                 size="1024x1024"
             )
 
+            # очищаем память
             del user_photos[user_id]
 
         else:
-            # Обычная генерация
+            # обычная генерация
             result = client.images.generate(
                 model="gpt-image-1",
                 prompt=prompt,
                 size="1024x1024"
             )
 
-        output_base64 = result.data[0].b64_json
-        output_bytes = base64.b64decode(output_base64)
+        # получаем результат
+        image_base64 = result.data[0].b64_json
+        import base64
+        image_bytes = base64.b64decode(image_base64)
 
-        photo = BufferedInputFile(output_bytes, filename="image.png")
+        photo = BufferedInputFile(image_bytes, filename="image.png")
 
         await message.answer_photo(photo)
 
 
 async def main():
     await dp.start_polling(bot)
-
-
-if __name__ == "__main__":
-    asyncio.run(main())
 
 
 if __name__ == "__main__":
