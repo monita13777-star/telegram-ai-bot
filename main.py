@@ -25,7 +25,7 @@ user_photos: dict[int, str] = {}
 def translate_and_enhance(user_prompt: str) -> str:
     try:
         response = client.chat.completions.create(
-            model="gpt-4.1-mini",
+            model="gpt-4o",
             messages=[
                 {
                     "role": "system",
@@ -112,39 +112,42 @@ async def handle_message(message: types.Message):
                 enhanced_prompt = build_face_prompt(prompt)
                 logger.info(f"[{user_id}] Редактирование фото. Промпт: {enhanced_prompt}")
 
-                response = client.responses.create(
-                    model="gpt-4.1",
-                    input=[
+                # Редактирование через gpt-4o с vision
+                response = client.chat.completions.create(
+                    model="gpt-4o",
+                    messages=[
                         {
                             "role": "user",
                             "content": [
                                 {
-                                    "type": "input_text",
-                                    "text": enhanced_prompt
+                                    "type": "text",
+                                    "text": f"Generate an image based on this reference photo: {enhanced_prompt}"
                                 },
                                 {
-                                    "type": "input_image",
-                                    "image_url": f"data:image/jpeg;base64,{saved_base64}"
-                                },
-                            ],
+                                    "type": "image_url",
+                                    "image_url": {
+                                        "url": f"data:image/jpeg;base64,{saved_base64}"
+                                    }
+                                }
+                            ]
                         }
                     ],
-                    tools=[{"type": "image_generation"}],
+                    max_tokens=500,
                 )
 
-                for item in response.output:
-                    if getattr(item, "type", None) == "image_generation_call":
-                        image_base64 = item.result
-                        break
+                # Генерируем картинку с улучшенным промптом
+                description = response.choices[0].message.content.strip()
+                final_prompt = (
+                    f"{enhanced_prompt}. Additional details from photo: {description[:300]}"
+                )
 
-                if not image_base64:
-                    for item in response.output:
-                        if hasattr(item, "content"):
-                            for block in item.content:
-                                if getattr(block, "type", None) == "image_generation_call":
-                                    image_base64 = block.result
-                                    break
-
+                result = client.images.generate(
+                    model="gpt-image-1",
+                    prompt=final_prompt,
+                    size="1024x1024",
+                    quality="high",
+                )
+                image_base64 = result.data[0].b64_json
                 del user_photos[user_id]
 
             else:
