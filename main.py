@@ -3,6 +3,7 @@ import os
 from aiogram import Bot, Dispatcher, types
 from aiogram.types import BufferedInputFile
 from openai import OpenAI
+import base64
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
@@ -11,14 +12,15 @@ bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 client = OpenAI(api_key=OPENAI_API_KEY)
 
-# временно храним фото пользователя
 user_photos = {}
+
+MAX_PROMPT_LENGTH = 1500  # ограничение длины
 
 
 @dp.message()
 async def handle_message(message: types.Message):
 
-    # 1️⃣ Если пришло фото
+    # Если пришло фото
     if message.photo:
         photo = message.photo[-1]
         file = await bot.get_file(photo.file_id)
@@ -27,26 +29,37 @@ async def handle_message(message: types.Message):
         image_bytes = downloaded_file.read()
         user_photos[message.from_user.id] = image_bytes
 
-        await message.answer("Фото получено 📸\nТеперь отправьте текст с описанием образа.")
+        await message.answer("Фото получено 📸\nТеперь отправьте описание образа.")
         return
 
-    # 2️⃣ Если пришёл текст
+    # Если пришёл текст
     if message.text:
-        prompt = message.text
+        prompt = message.text.strip()
+
+        if len(prompt) > MAX_PROMPT_LENGTH:
+            await message.answer("⚠️ Слишком длинное описание. Укоротите текст.")
+            return
+
         user_id = message.from_user.id
 
-        # Если есть сохранённое фото → редактируем
+        # Если есть фото → редактирование
         if user_id in user_photos:
             original_image = user_photos[user_id]
 
+            # автоматически усиливаем сохранение лица
+            safe_prompt = (
+                f"{prompt}, preserve original facial features, "
+                f"keep the same person, maintain exact face identity, "
+                f"do not change facial structure"
+            )
+
             result = client.images.generate(
                 model="gpt-image-1",
-                prompt=prompt,
+                prompt=safe_prompt,
                 input_image=original_image,
                 size="1024x1024"
             )
 
-            # очищаем память
             del user_photos[user_id]
 
         else:
@@ -57,9 +70,7 @@ async def handle_message(message: types.Message):
                 size="1024x1024"
             )
 
-        # получаем результат
         image_base64 = result.data[0].b64_json
-        import base64
         image_bytes = base64.b64decode(image_base64)
 
         photo = BufferedInputFile(image_bytes, filename="image.png")
