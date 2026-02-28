@@ -13,13 +13,14 @@ dp = Dispatcher()
 
 client = OpenAI(api_key=OPENAI_API_KEY)
 
+# Храним фото пользователя временно
 user_photos = {}
 
 
 @dp.message()
 async def handle_message(message: types.Message):
 
-    # Если пользователь отправил фото
+    # Если отправлено фото
     if message.photo:
         photo = message.photo[-1]
         file = await bot.get_file(photo.file_id)
@@ -31,21 +32,20 @@ async def handle_message(message: types.Message):
         await message.answer("Фото получено 📸\nТеперь отправьте текст с описанием образа.")
         return
 
-    # Если пользователь отправил текст
+    # Если отправлен текст
     if message.text:
         prompt = message.text
         user_id = message.from_user.id
 
-        # Если есть фото — делаем редактирование
+        # Если есть сохранённое фото → редактируем
         if user_id in user_photos:
             original_image = user_photos[user_id]
-
             image_base64 = base64.b64encode(original_image).decode("utf-8")
 
             result = client.images.generate(
                 model="gpt-image-1",
                 prompt=prompt,
-                image=image_base64,
+                input_image=image_base64,
                 size="1024x1024"
             )
 
@@ -69,6 +69,10 @@ async def handle_message(message: types.Message):
 
 async def main():
     await dp.start_polling(bot)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
 
 
 if __name__ == "__main__":
