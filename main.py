@@ -132,18 +132,24 @@ async def handle_message(message: types.Message):
                     tools=[{"type": "image_generation"}],
                 )
 
+                # Логируем всю структуру ответа
+                for i, item in enumerate(response.output):
+                    logger.info(f"output[{i}] type={getattr(item, 'type', '?')} keys={list(vars(item).keys()) if hasattr(item, '__dict__') else '?'}")
+                    if hasattr(item, 'content'):
+                        for j, block in enumerate(item.content):
+                            logger.info(f"  content[{j}] type={getattr(block, 'type', '?')}")
+
+                # Ищем изображение
                 for item in response.output:
-                    if getattr(item, "type", None) == "image_generation_call":
+                    item_type = getattr(item, "type", None)
+                    if item_type == "image_generation_call":
                         image_base64 = item.result
                         break
-
-                if not image_base64:
-                    for item in response.output:
-                        if hasattr(item, "content"):
-                            for block in item.content:
-                                if getattr(block, "type", None) == "image_generation_call":
-                                    image_base64 = block.result
-                                    break
+                    if item_type == "message" and hasattr(item, "content"):
+                        for block in item.content:
+                            if getattr(block, "type", None) == "image_generation_call":
+                                image_base64 = block.result
+                                break
 
                 del user_photos[user_id]
 
