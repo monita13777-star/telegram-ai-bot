@@ -51,23 +51,38 @@ def translate_and_enhance(user_prompt: str) -> str:
         return user_prompt
 
 
+async def upload_image_to_fal(image_base64: str) -> str:
+    """Загружаем фото на fal.ai и получаем URL"""
+    image_bytes = base64.b64decode(image_base64)
+    async with httpx.AsyncClient(timeout=60) as http:
+        response = await http.post(
+            "https://rest.alpha.fal.ai/storage/upload/base64",
+            headers={
+                "Authorization": f"Key {FAL_KEY}",
+                "Content-Type": "application/json"
+            },
+            json={
+                "file_name": "image.jpg",
+                "content_type": "image/jpeg",
+                "data": image_base64
+            }
+        )
+        logger.info(f"Upload response: {response.status_code} {response.text}")
+        data = response.json()
+        return data.get("url") or data.get("access_url")
+
+
 async def generate_with_fal(image_base64: str, prompt: str) -> bytes:
-    """Генерация через fal.ai с сохранением лица"""
+    """Генерация через fal.ai Flux PuLID с сохранением лица"""
     translated_prompt = translate_and_enhance(prompt)
 
-    # Сначала загружаем фото на fal.ai
-    async with httpx.AsyncClient(timeout=120) as http:
-        # Загружаем изображение
-        upload_response = await http.post(
-            "https://fal.run/fal-ai/upload",
-            headers={"Authorization": f"Key {FAL_KEY}"},
-            files={"file": ("image.jpg", base64.b64decode(image_base64), "image/jpeg")}
-        )
-        upload_data = upload_response.json()
-        image_url = upload_data.get("url")
-        logger.info(f"Фото загружено: {image_url}")
+    image_url = await upload_image_to_fal(image_base64)
+    logger.info(f"Фото загружено: {image_url}")
 
-        # Генерируем с сохранением лица через Flux
+    if not image_url:
+        raise ValueError("Не удалось загрузить фото на fal.ai")
+
+    async with httpx.AsyncClient(timeout=120) as http:
         gen_response = await http.post(
             "https://fal.run/fal-ai/flux-pulid",
             headers={
@@ -88,9 +103,11 @@ async def generate_with_fal(image_base64: str, prompt: str) -> bytes:
         gen_data = gen_response.json()
         logger.info(f"Ответ fal.ai: {gen_data}")
 
+        if "images" not in gen_data:
+            raise ValueError(f"Ошибка fal.ai: {gen_data}")
+
         result_url = gen_data["images"][0]["url"]
 
-        # Скачиваем результат
         img_response = await http.get(result_url)
         return img_response.content
 
@@ -142,7 +159,6 @@ async def handle_message(message: types.Message):
 
         try:
             if user_id in user_photos:
-                # Генерация через fal.ai с сохранением лица
                 saved_base64 = user_photos[user_id]
                 image_bytes = await generate_with_fal(saved_base64, prompt)
                 del user_photos[user_id]
@@ -151,7 +167,6 @@ async def handle_message(message: types.Message):
                 await message.answer_photo(photo_file, caption="✅ Готово!")
 
             else:
-                # Обычная генерация через gpt-image-1
                 translated_prompt = translate_and_enhance(prompt)
                 logger.info(f"[{user_id}] Генерация. Промпт: {translated_prompt}")
 
