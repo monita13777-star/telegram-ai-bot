@@ -185,10 +185,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-```
-
-И обнови `requirements.txt` — добавь туда `httpx`:
-```
-aiogram==3.7.0
-openai==1.51.0
-httpx==0.27.0
