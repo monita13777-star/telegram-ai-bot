@@ -2,8 +2,7 @@ import asyncio
 import os
 import base64
 import logging
-import io
-import fal_client
+import httpx
 from aiogram import Bot, Dispatcher, types
 from aiogram.types import BufferedInputFile
 from openai import OpenAI
@@ -16,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-os.environ["FAL_KEY"] = os.getenv("FAL_API_KEY", "")
+FAL_API_KEY = os.getenv("FAL_API_KEY")
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
@@ -53,37 +52,67 @@ def translate_and_enhance(user_prompt: str) -> str:
 
 
 async def generate_with_flux_pulid(image_base64: str, prompt: str) -> bytes:
-    """Генерация через Flux PuLID с официальным fal_client"""
+    """Генерация через Flux PuLID"""
     translated_prompt = translate_and_enhance(prompt)
     image_bytes = base64.b64decode(image_base64)
 
-    # Загружаем фото через официальный клиент
-    image_url = await fal_client.upload_async(
-        image_bytes,
-        content_type="image/jpeg"
-    )
-    logger.info(f"Фото загружено: {image_url}")
+    async with httpx.AsyncClient(timeout=180) as http:
+        # Загружаем фото на fal.ai storage
+        upload = await http.post(
+            "https://fal.run/fal-ai/storage/upload/initiate",
+            headers={
+                "Authorization": f"Key {FAL_API_KEY}",
+                "Content-Type": "application/json"
+            },
+            json={
+                "content_type": "image/jpeg",
+                "file_name": "photo.jpg"
+            }
+        )
+        logger.info(f"Initiate upload: {upload.status_code} {upload.text[:300]}")
+        upload_data = upload.json()
 
-    # Генерируем
-    result = await fal_client.run_async(
-        "fal-ai/flux-pulid",
-        arguments={
-            "prompt": translated_prompt,
-            "reference_image_url": image_url,
-            "num_inference_steps": 20,
-            "guidance_scale": 4,
-            "true_cfg": 1,
-            "id_weight": 1.0,
-            "image_size": "square_hd",
-            "num_images": 1,
-        }
-    )
-    logger.info(f"Результат fal.ai: {result}")
+        upload_url = upload_data.get("upload_url")
+        image_url = upload_data.get("file_url")
 
-    result_url = result["images"][0]["url"]
+        if upload_url:
+            # Загружаем файл по presigned URL
+            put_response = await http.put(
+                upload_url,
+                content=image_bytes,
+                headers={"Content-Type": "image/jpeg"}
+            )
+            logger.info(f"PUT upload: {put_response.status_code}")
+        else:
+            raise ValueError(f"Не получен upload_url: {upload_data}")
 
-    import httpx
-    async with httpx.AsyncClient(timeout=60) as http:
+        logger.info(f"Фото загружено: {image_url}")
+
+        # Генерируем с Flux PuLID
+        gen_response = await http.post(
+            "https://fal.run/fal-ai/flux-pulid",
+            headers={
+                "Authorization": f"Key {FAL_API_KEY}",
+                "Content-Type": "application/json"
+            },
+            json={
+                "prompt": translated_prompt,
+                "reference_image_url": image_url,
+                "num_inference_steps": 20,
+                "guidance_scale": 4,
+                "true_cfg": 1,
+                "id_weight": 1.0,
+                "image_size": "square_hd",
+                "num_images": 1,
+            }
+        )
+        gen_data = gen_response.json()
+        logger.info(f"Ответ fal.ai: {gen_data}")
+
+        if "images" not in gen_data:
+            raise ValueError(f"Ошибка генерации: {gen_data}")
+
+        result_url = gen_data["images"][0]["url"]
         img_response = await http.get(result_url)
         return img_response.content
 
