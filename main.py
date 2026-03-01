@@ -51,35 +51,14 @@ def translate_and_enhance(user_prompt: str) -> str:
         return user_prompt
 
 
-async def upload_image_to_fal(image_base64: str) -> str:
-    """Загружаем фото на fal.ai и получаем URL"""
-    image_bytes = base64.b64decode(image_base64)
-    async with httpx.AsyncClient(timeout=60) as http:
-        response = await http.post(
-            "https://fal.run/fal-ai/storage/upload",
-            headers={
-                "Authorization": f"Key {FAL_KEY}",
-            },
-            files={
-                "file": ("image.jpg", image_bytes, "image/jpeg")
-            }
-        )
-        logger.info(f"Upload response: {response.status_code} {response.text}")
-        data = response.json()
-        return data.get("url") or data.get("access_url")
-
-
 async def generate_with_fal(image_base64: str, prompt: str) -> bytes:
-    """Генерация через fal.ai Flux PuLID с сохранением лица"""
+    """Генерация через fal.ai Flux PuLID — передаём фото как data URI"""
     translated_prompt = translate_and_enhance(prompt)
 
-    image_url = await upload_image_to_fal(image_base64)
-    logger.info(f"Фото загружено: {image_url}")
+    # Передаём фото напрямую как data URI — без отдельной загрузки
+    image_data_uri = f"data:image/jpeg;base64,{image_base64}"
 
-    if not image_url:
-        raise ValueError("Не удалось загрузить фото на fal.ai")
-
-    async with httpx.AsyncClient(timeout=120) as http:
+    async with httpx.AsyncClient(timeout=180) as http:
         gen_response = await http.post(
             "https://fal.run/fal-ai/flux-pulid",
             headers={
@@ -88,7 +67,7 @@ async def generate_with_fal(image_base64: str, prompt: str) -> bytes:
             },
             json={
                 "prompt": translated_prompt,
-                "reference_image_url": image_url,
+                "reference_image_url": image_data_uri,
                 "num_inference_steps": 20,
                 "guidance_scale": 4,
                 "true_cfg": 1,
@@ -104,7 +83,6 @@ async def generate_with_fal(image_base64: str, prompt: str) -> bytes:
             raise ValueError(f"Ошибка fal.ai: {gen_data}")
 
         result_url = gen_data["images"][0]["url"]
-
         img_response = await http.get(result_url)
         return img_response.content
 
