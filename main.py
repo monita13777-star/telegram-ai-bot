@@ -22,7 +22,55 @@ client = OpenAI(api_key=OPENAI_API_KEY)
 user_photos: dict[int, str] = {}
 
 
+def analyze_face(image_base64: str) -> str:
+    """Детально анализируем лицо через gpt-4o vision"""
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": (
+                                "Analyze this person's appearance in extreme detail for image generation. "
+                                "Describe EXACTLY:\n"
+                                "- Face shape (oval, round, square, heart, etc)\n"
+                                "- Eye color, shape, and size\n"
+                                "- Nose shape and size\n"
+                                "- Lip shape and fullness\n"
+                                "- Eyebrow shape and color\n"
+                                "- Hair color (exact shade), length, texture, and style\n"
+                                "- Skin tone (exact description)\n"
+                                "- Any distinctive features (freckles, dimples, etc)\n"
+                                "- Age appearance\n"
+                                "- Gender\n"
+                                "Be extremely precise. This will be used to recreate this exact person."
+                            )
+                        },
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:image/jpeg;base64,{image_base64}",
+                                "detail": "high"
+                            }
+                        }
+                    ]
+                }
+            ],
+            max_tokens=600,
+        )
+        description = response.choices[0].message.content.strip()
+        logger.info(f"Анализ лица: {description}")
+        return description
+    except Exception as e:
+        logger.warning(f"Анализ лица не удался: {e}")
+        return ""
+
+
 def translate_and_enhance(user_prompt: str) -> str:
+    """Переводим и улучшаем промпт"""
     try:
         response = client.chat.completions.create(
             model="gpt-4o",
@@ -33,29 +81,30 @@ def translate_and_enhance(user_prompt: str) -> str:
                         "You are a professional image prompt translator and enhancer. "
                         "Translate the user's prompt to English if needed. "
                         "Then enhance it to be vivid and detailed for image generation. "
-                        "Keep it under 200 words. Return ONLY the enhanced English prompt, nothing else."
+                        "Keep it under 150 words. Return ONLY the enhanced English prompt, nothing else."
                     )
                 },
                 {"role": "user", "content": user_prompt}
             ],
-            max_tokens=300,
+            max_tokens=250,
             temperature=0.7
         )
         translated = response.choices[0].message.content.strip()
         logger.info(f"Промпт: '{user_prompt}' -> '{translated}'")
         return translated
     except Exception as e:
-        logger.warning(f"Перевод не удался, используем оригинал: {e}")
+        logger.warning(f"Перевод не удался: {e}")
         return user_prompt
 
 
-def build_face_prompt(user_prompt: str) -> str:
+def build_face_prompt(face_description: str, user_prompt: str) -> str:
+    """Строим финальный промпт с максимальным сохранением лица"""
     translated = translate_and_enhance(user_prompt)
     return (
-        f"{translated}. "
-        "IMPORTANT: Preserve the exact facial identity — same face shape, eyes, nose, lips, "
-        "skin tone, and all distinguishing features. The person must be fully recognizable. "
-        "Photorealistic, high quality, 8K."
+        f"A photorealistic portrait of a person with these EXACT features: {face_description}. "
+        f"Scene and style: {translated}. "
+        "CRITICAL: The person must have exactly the same face, eyes, nose, lips, hair color and skin tone "
+        "as described above. Do not change any facial features. Ultra high quality, 8K, photorealistic."
     )
 
 
@@ -65,14 +114,22 @@ async def handle_message(message: types.Message):
 
     if message.photo:
         try:
+            await message.answer("📸 Анализирую фото, подождите...")
             photo = message.photo[-1]
             file = await bot.get_file(photo.file_id)
             downloaded = await bot.download_file(file.file_path)
             image_bytes = downloaded.read()
             image_base64 = base64.b64encode(image_bytes).decode("utf-8")
-            user_photos[user_id] = image_base64
+
+            # Сразу анализируем лицо и сохраняем описание
+            face_description = analyze_face(image_base64)
+            user_photos[user_id] = {
+                "base64": image_base64,
+                "face_description": face_description
+            }
+
             await message.answer(
-                "📸 Фото сохранено!\n\nНапишите описание — как изменить образ.\n"
+                "📸 Фото проанализировано!\n\nНапишите описание — как изменить образ.\n"
                 "Можно на *русском* или *английском* 😊",
                 parse_mode="Markdown"
             )
@@ -108,38 +165,10 @@ async def handle_message(message: types.Message):
             image_base64 = None
 
             if user_id in user_photos:
-                saved_base64 = user_photos[user_id]
-                enhanced_prompt = build_face_prompt(prompt)
-                logger.info(f"[{user_id}] Редактирование фото. Промпт: {enhanced_prompt}")
-
-                # Редактирование через gpt-4o с vision
-                response = client.chat.completions.create(
-                    model="gpt-4o",
-                    messages=[
-                        {
-                            "role": "user",
-                            "content": [
-                                {
-                                    "type": "text",
-                                    "text": f"Generate an image based on this reference photo: {enhanced_prompt}"
-                                },
-                                {
-                                    "type": "image_url",
-                                    "image_url": {
-                                        "url": f"data:image/jpeg;base64,{saved_base64}"
-                                    }
-                                }
-                            ]
-                        }
-                    ],
-                    max_tokens=500,
-                )
-
-                # Генерируем картинку с улучшенным промптом
-                description = response.choices[0].message.content.strip()
-                final_prompt = (
-                    f"{enhanced_prompt}. Additional details from photo: {description[:300]}"
-                )
+                saved = user_photos[user_id]
+                face_description = saved["face_description"]
+                final_prompt = build_face_prompt(face_description, prompt)
+                logger.info(f"[{user_id}] Финальный промпт: {final_prompt}")
 
                 result = client.images.generate(
                     model="gpt-image-1",
