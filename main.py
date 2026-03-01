@@ -2,7 +2,6 @@ import asyncio
 import os
 import base64
 import logging
-import httpx
 from aiogram import Bot, Dispatcher, types
 from aiogram.types import BufferedInputFile
 from openai import OpenAI
@@ -15,7 +14,6 @@ logger = logging.getLogger(__name__)
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-FAL_KEY = os.getenv("FAL_API_KEY")
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
@@ -51,38 +49,14 @@ def translate_and_enhance(user_prompt: str) -> str:
         return user_prompt
 
 
-async def generate_with_fal(image_base64: str, prompt: str) -> bytes:
-    """Генерация через fal.ai Flux PuLID с сохранением лица"""
-    translated_prompt = translate_and_enhance(prompt)
-    image_data_uri = f"data:image/jpeg;base64,{image_base64}"
-
-    async with httpx.AsyncClient(timeout=180) as http:
-        gen_response = await http.post(
-            "https://fal.run/fal-ai/flux-pulid",
-            headers={
-                "Authorization": f"Key {FAL_KEY}",
-                "Content-Type": "application/json"
-            },
-            json={
-                "prompt": translated_prompt,
-                "reference_image_url": image_data_uri,
-                "num_inference_steps": 20,
-                "guidance_scale": 4,
-                "true_cfg": 1,
-                "id_weight": 1.0,
-                "image_size": "square_hd",
-                "num_images": 1,
-            }
-        )
-        gen_data = gen_response.json()
-        logger.info(f"Ответ fal.ai: {gen_data}")
-
-        if "images" not in gen_data:
-            raise ValueError(f"Ошибка fal.ai: {gen_data}")
-
-        result_url = gen_data["images"][0]["url"]
-        img_response = await http.get(result_url)
-        return img_response.content
+def build_face_prompt(user_prompt: str) -> str:
+    translated = translate_and_enhance(user_prompt)
+    return (
+        f"{translated}. "
+        "IMPORTANT: Preserve the exact facial identity — same face shape, eyes, nose, lips, "
+        "skin tone, hair color, hair length, and all distinguishing features. "
+        "The person must be fully recognizable. Photorealistic, high quality, 8K."
+    )
 
 
 @dp.message()
@@ -131,13 +105,47 @@ async def handle_message(message: types.Message):
         await message.answer("⏳ Генерирую, подождите...")
 
         try:
+            image_base64 = None
+
             if user_id in user_photos:
                 saved_base64 = user_photos[user_id]
-                image_bytes = await generate_with_fal(saved_base64, prompt)
-                del user_photos[user_id]
+                enhanced_prompt = build_face_prompt(prompt)
+                logger.info(f"[{user_id}] Редактирование фото. Промпт: {enhanced_prompt}")
 
-                photo_file = BufferedInputFile(image_bytes, filename="image.png")
-                await message.answer_photo(photo_file, caption="✅ Готово!")
+                response = client.responses.create(
+                    model="gpt-4.1",
+                    input=[
+                        {
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "input_text",
+                                    "text": enhanced_prompt
+                                },
+                                {
+                                    "type": "input_image",
+                                    "image_url": f"data:image/jpeg;base64,{saved_base64}"
+                                },
+                            ],
+                        }
+                    ],
+                    tools=[{"type": "image_generation"}],
+                )
+
+                for item in response.output:
+                    if getattr(item, "type", None) == "image_generation_call":
+                        image_base64 = item.result
+                        break
+
+                if not image_base64:
+                    for item in response.output:
+                        if hasattr(item, "content"):
+                            for block in item.content:
+                                if getattr(block, "type", None) == "image_generation_call":
+                                    image_base64 = block.result
+                                    break
+
+                del user_photos[user_id]
 
             else:
                 translated_prompt = translate_and_enhance(prompt)
@@ -150,9 +158,13 @@ async def handle_message(message: types.Message):
                     quality="high",
                 )
                 image_base64 = result.data[0].b64_json
-                image_bytes = base64.b64decode(image_base64)
-                photo_file = BufferedInputFile(image_bytes, filename="image.png")
-                await message.answer_photo(photo_file, caption="✅ Готово!")
+
+            if not image_base64:
+                raise ValueError("Изображение не получено от API")
+
+            image_bytes = base64.b64decode(image_base64)
+            photo_file = BufferedInputFile(image_bytes, filename="image.png")
+            await message.answer_photo(photo_file, caption="✅ Готово!")
 
         except Exception as e:
             logger.error(f"[{user_id}] Ошибка: {e}", exc_info=True)
@@ -161,7 +173,7 @@ async def handle_message(message: types.Message):
             if "content_policy" in err.lower() or "safety" in err.lower():
                 await message.answer("⚠️ Запрос нарушает правила контента. Попробуйте переформулировать.")
             elif "billing" in err.lower() or "quota" in err.lower():
-                await message.answer("💳 Проблема с балансом. Проверьте аккаунт.")
+                await message.answer("💳 Проблема с балансом OpenAI. Проверьте аккаунт.")
             else:
                 await message.answer(f"❌ Ошибка:\n`{err[:300]}`", parse_mode="Markdown")
 
