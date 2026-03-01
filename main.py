@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-FAL_KEY = os.getenv("FAL_KEY")
+FAL_KEY = os.getenv("FAL_API_KEY")
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
@@ -52,10 +52,8 @@ def translate_and_enhance(user_prompt: str) -> str:
 
 
 async def generate_with_fal(image_base64: str, prompt: str) -> bytes:
-    """Генерация через fal.ai Flux PuLID — передаём фото как data URI"""
+    """Генерация через fal.ai Flux PuLID с сохранением лица"""
     translated_prompt = translate_and_enhance(prompt)
-
-    # Передаём фото напрямую как data URI — без отдельной загрузки
     image_data_uri = f"data:image/jpeg;base64,{image_base64}"
 
     async with httpx.AsyncClient(timeout=180) as http:
