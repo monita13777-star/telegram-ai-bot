@@ -52,43 +52,13 @@ def translate_and_enhance(user_prompt: str) -> str:
 
 
 async def generate_with_flux_pulid(image_base64: str, prompt: str) -> bytes:
-    """Генерация через Flux PuLID"""
+    """Генерация через Flux PuLID — передаём фото как data URI"""
     translated_prompt = translate_and_enhance(prompt)
-    image_bytes = base64.b64decode(image_base64)
+
+    # Передаём фото напрямую как data URI — без отдельной загрузки!
+    image_data_uri = f"data:image/jpeg;base64,{image_base64}"
 
     async with httpx.AsyncClient(timeout=180) as http:
-        # Загружаем фото на fal.ai storage
-        upload = await http.post(
-            "https://fal.run/fal-ai/storage/upload/initiate",
-            headers={
-                "Authorization": f"Key {FAL_API_KEY}",
-                "Content-Type": "application/json"
-            },
-            json={
-                "content_type": "image/jpeg",
-                "file_name": "photo.jpg"
-            }
-        )
-        logger.info(f"Initiate upload: {upload.status_code} {upload.text[:300]}")
-        upload_data = upload.json()
-
-        upload_url = upload_data.get("upload_url")
-        image_url = upload_data.get("file_url")
-
-        if upload_url:
-            # Загружаем файл по presigned URL
-            put_response = await http.put(
-                upload_url,
-                content=image_bytes,
-                headers={"Content-Type": "image/jpeg"}
-            )
-            logger.info(f"PUT upload: {put_response.status_code}")
-        else:
-            raise ValueError(f"Не получен upload_url: {upload_data}")
-
-        logger.info(f"Фото загружено: {image_url}")
-
-        # Генерируем с Flux PuLID
         gen_response = await http.post(
             "https://fal.run/fal-ai/flux-pulid",
             headers={
@@ -97,7 +67,7 @@ async def generate_with_flux_pulid(image_base64: str, prompt: str) -> bytes:
             },
             json={
                 "prompt": translated_prompt,
-                "reference_image_url": image_url,
+                "reference_image_url": image_data_uri,
                 "num_inference_steps": 20,
                 "guidance_scale": 4,
                 "true_cfg": 1,
@@ -110,7 +80,7 @@ async def generate_with_flux_pulid(image_base64: str, prompt: str) -> bytes:
         logger.info(f"Ответ fal.ai: {gen_data}")
 
         if "images" not in gen_data:
-            raise ValueError(f"Ошибка генерации: {gen_data}")
+            raise ValueError(f"Ошибка fal.ai: {gen_data}")
 
         result_url = gen_data["images"][0]["url"]
         img_response = await http.get(result_url)
