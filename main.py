@@ -2,6 +2,7 @@ import asyncio
 import os
 import base64
 import logging
+import io
 from aiogram import Bot, Dispatcher, types
 from aiogram.types import BufferedInputFile
 from openai import OpenAI
@@ -52,7 +53,7 @@ def translate_and_enhance(user_prompt: str) -> str:
 def build_face_prompt(user_prompt: str) -> str:
     translated = translate_and_enhance(user_prompt)
     return (
-        f"Edit this photo: {translated}. "
+        f"{translated}. "
         "IMPORTANT: Preserve the exact facial identity — same face shape, eyes, nose, lips, "
         "skin tone, hair color, hair length, and all distinguishing features. "
         "The person must be fully recognizable. Photorealistic, high quality, 8K."
@@ -105,46 +106,23 @@ async def handle_message(message: types.Message):
         await message.answer("⏳ Генерирую, подождите...")
 
         try:
-            image_base64 = None
-
             if user_id in user_photos:
                 saved_base64 = user_photos[user_id]
                 enhanced_prompt = build_face_prompt(prompt)
                 logger.info(f"[{user_id}] Редактирование фото. Промпт: {enhanced_prompt}")
 
-                response = client.responses.create(
-                    model="gpt-4.1",
-                    input=[
-                        {
-                            "role": "user",
-                            "content": [
-                                {
-                                    "type": "input_text",
-                                    "text": enhanced_prompt
-                                },
-                                {
-                                    "type": "input_image",
-                                    "image_url": f"data:image/jpeg;base64,{saved_base64}"
-                                },
-                            ],
-                        }
-                    ],
-                    tools=[{
-                        "type": "image_generation",
-                        "action": "edit",
-                        "input_fidelity": "high",
-                        "quality": "high",
-                    }],
-                )
+                # Используем images.edit — правильный метод для редактирования фото
+                image_bytes = base64.b64decode(saved_base64)
+                image_file = io.BytesIO(image_bytes)
+                image_file.name = "image.png"
 
-                # Извлекаем изображение
-                image_base64 = next(
-                    (item.result for item in response.output
-                     if getattr(item, "type", None) == "image_generation_call"),
-                    None
+                result = client.images.edit(
+                    model="gpt-image-1",
+                    image=image_file,
+                    prompt=enhanced_prompt,
+                    size="1024x1024",
                 )
-
-                logger.info(f"Типы в output: {[getattr(i, 'type', '?') for i in response.output]}")
+                image_base64 = result.data[0].b64_json
                 del user_photos[user_id]
 
             else:
