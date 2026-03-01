@@ -2,8 +2,8 @@ import asyncio
 import os
 import base64
 import logging
-import httpx
 import io
+import fal_client
 from aiogram import Bot, Dispatcher, types
 from aiogram.types import BufferedInputFile
 from openai import OpenAI
@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-FAL_API_KEY = os.getenv("FAL_API_KEY")
+os.environ["FAL_KEY"] = os.getenv("FAL_API_KEY", "")
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
@@ -52,77 +52,38 @@ def translate_and_enhance(user_prompt: str) -> str:
         return user_prompt
 
 
-async def upload_to_fal(image_bytes: bytes) -> str:
-    """Загружаем фото на fal.ai через правильный endpoint"""
-    async with httpx.AsyncClient(timeout=60) as http:
-        response = await http.post(
-            "https://fal.run/fal-ai/imageutils/resize",
-            headers={"Authorization": f"Key {FAL_API_KEY}"},
-            files={"image": ("image.jpg", image_bytes, "image/jpeg")},
-            data={"width": "1024", "height": "1024"}
-        )
-        logger.info(f"Upload: {response.status_code} {response.text[:200]}")
-
-        if response.status_code != 200:
-            raise ValueError(f"Ошибка загрузки: {response.text[:200]}")
-
-        data = response.json()
-        return data.get("image", {}).get("url") or data.get("url")
-
-
 async def generate_with_flux_pulid(image_base64: str, prompt: str) -> bytes:
-    """Генерация через Flux PuLID — лучшее сохранение лица"""
+    """Генерация через Flux PuLID с официальным fal_client"""
     translated_prompt = translate_and_enhance(prompt)
     image_bytes = base64.b64decode(image_base64)
 
-    async with httpx.AsyncClient(timeout=180) as http:
-        # Сначала загружаем через fal storage
-        upload_response = await http.put(
-            "https://fal.run/files/upload",
-            headers={
-                "Authorization": f"Key {FAL_API_KEY}",
-                "Content-Type": "image/jpeg",
-                "X-Fal-File-Name": "photo.jpg"
-            },
-            content=image_bytes
-        )
-        logger.info(f"Upload: {upload_response.status_code} {upload_response.text[:300]}")
+    # Загружаем фото через официальный клиент
+    image_url = await fal_client.upload_async(
+        image_bytes,
+        content_type="image/jpeg"
+    )
+    logger.info(f"Фото загружено: {image_url}")
 
-        if upload_response.status_code not in (200, 201):
-            raise ValueError(f"Ошибка загрузки фото: {upload_response.text[:200]}")
+    # Генерируем
+    result = await fal_client.run_async(
+        "fal-ai/flux-pulid",
+        arguments={
+            "prompt": translated_prompt,
+            "reference_image_url": image_url,
+            "num_inference_steps": 20,
+            "guidance_scale": 4,
+            "true_cfg": 1,
+            "id_weight": 1.0,
+            "image_size": "square_hd",
+            "num_images": 1,
+        }
+    )
+    logger.info(f"Результат fal.ai: {result}")
 
-        upload_data = upload_response.json()
-        image_url = upload_data.get("url") or upload_data.get("access_url")
-        logger.info(f"Фото загружено: {image_url}")
+    result_url = result["images"][0]["url"]
 
-        if not image_url:
-            raise ValueError("URL фото не получен")
-
-        # Генерируем с Flux PuLID
-        gen_response = await http.post(
-            "https://fal.run/fal-ai/flux-pulid",
-            headers={
-                "Authorization": f"Key {FAL_API_KEY}",
-                "Content-Type": "application/json"
-            },
-            json={
-                "prompt": translated_prompt,
-                "reference_image_url": image_url,
-                "num_inference_steps": 20,
-                "guidance_scale": 4,
-                "true_cfg": 1,
-                "id_weight": 1.0,
-                "image_size": "square_hd",
-                "num_images": 1,
-            }
-        )
-        gen_data = gen_response.json()
-        logger.info(f"Ответ fal.ai: {gen_data}")
-
-        if "images" not in gen_data:
-            raise ValueError(f"Ошибка генерации: {gen_data}")
-
-        result_url = gen_data["images"][0]["url"]
+    import httpx
+    async with httpx.AsyncClient(timeout=60) as http:
         img_response = await http.get(result_url)
         return img_response.content
 
