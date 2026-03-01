@@ -56,15 +56,12 @@ async def upload_image_to_fal(image_base64: str) -> str:
     image_bytes = base64.b64decode(image_base64)
     async with httpx.AsyncClient(timeout=60) as http:
         response = await http.post(
-            "https://rest.alpha.fal.ai/storage/upload/base64",
+            "https://fal.run/fal-ai/storage/upload",
             headers={
                 "Authorization": f"Key {FAL_KEY}",
-                "Content-Type": "application/json"
             },
-            json={
-                "file_name": "image.jpg",
-                "content_type": "image/jpeg",
-                "data": image_base64
+            files={
+                "file": ("image.jpg", image_bytes, "image/jpeg")
             }
         )
         logger.info(f"Upload response: {response.status_code} {response.text}")
