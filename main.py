@@ -52,7 +52,7 @@ def translate_and_enhance(user_prompt: str) -> str:
 def build_face_prompt(user_prompt: str) -> str:
     translated = translate_and_enhance(user_prompt)
     return (
-        f"{translated}. "
+        f"Edit this photo: {translated}. "
         "IMPORTANT: Preserve the exact facial identity — same face shape, eyes, nose, lips, "
         "skin tone, hair color, hair length, and all distinguishing features. "
         "The person must be fully recognizable. Photorealistic, high quality, 8K."
@@ -129,28 +129,22 @@ async def handle_message(message: types.Message):
                             ],
                         }
                     ],
-                    tools=[{"type": "image_generation"}],
+                    tools=[{
+                        "type": "image_generation",
+                        "action": "edit",
+                        "input_fidelity": "high",
+                        "quality": "high",
+                    }],
                 )
 
-                # Логируем всю структуру ответа
-                for i, item in enumerate(response.output):
-                    logger.info(f"output[{i}] type={getattr(item, 'type', '?')} keys={list(vars(item).keys()) if hasattr(item, '__dict__') else '?'}")
-                    if hasattr(item, 'content'):
-                        for j, block in enumerate(item.content):
-                            logger.info(f"  content[{j}] type={getattr(block, 'type', '?')}")
+                # Извлекаем изображение
+                image_base64 = next(
+                    (item.result for item in response.output
+                     if getattr(item, "type", None) == "image_generation_call"),
+                    None
+                )
 
-                # Ищем изображение
-                for item in response.output:
-                    item_type = getattr(item, "type", None)
-                    if item_type == "image_generation_call":
-                        image_base64 = item.result
-                        break
-                    if item_type == "message" and hasattr(item, "content"):
-                        for block in item.content:
-                            if getattr(block, "type", None) == "image_generation_call":
-                                image_base64 = block.result
-                                break
-
+                logger.info(f"Типы в output: {[getattr(i, 'type', '?') for i in response.output]}")
                 del user_photos[user_id]
 
             else:
