@@ -148,7 +148,7 @@ async def generate_with_flux_pulid(image_base64: str, prompt: str) -> bytes:
                 "num_inference_steps": 30,
                 "guidance_scale": 7,
                 "true_cfg": 1,
-                "id_weight": 1.5,
+                "id_weight": 1.0,
                 "image_size": "square_hd",
                 "num_images": 1,
             }
