@@ -4,6 +4,7 @@ import base64
 import logging
 import httpx
 import json
+import asyncpg
 from io import BytesIO
 from PIL import Image
 from aiogram import Bot, Dispatcher, types
@@ -24,6 +25,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 FAL_API_KEY = os.getenv("FAL_API_KEY")
 PAYMENT_PHONE = os.getenv("PAYMENT_PHONE")
+DATABASE_URL = os.getenv("DATABASE_URL")
 ADMIN_ID = 1991186266
 
 TARIFFS = {
@@ -33,7 +35,6 @@ TARIFFS = {
     "100": {"name": "100 фото", "count": 100, "price": 1490},
 }
 
-CREDITS_FILE = "/tmp/credits.json"
 FREE_CREDITS = 3
 
 bot = Bot(token=BOT_TOKEN)
@@ -42,58 +43,58 @@ dp = Dispatcher(storage=storage)
 client = OpenAI(api_key=OPENAI_API_KEY)
 
 user_photos: dict[int, str] = {}
+db_pool = None
 
 
-def load_credits() -> dict:
-    try:
-        if os.path.exists(CREDITS_FILE):
-            with open(CREDITS_FILE, "r") as f:
-                return json.load(f)
-    except Exception as e:
-        logger.error(f"Ошибка загрузки кредитов: {e}")
-    return {}
+async def init_db():
+    global db_pool
+    db_pool = await asyncpg.create_pool(DATABASE_URL)
+    async with db_pool.acquire() as conn:
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                user_id BIGINT PRIMARY KEY,
+                credits INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT NOW()
+            )
+        """)
+    logger.info("База данных инициализирована!")
 
 
-def save_credits(data: dict):
-    try:
-        with open(CREDITS_FILE, "w") as f:
-            json.dump(data, f)
-    except Exception as e:
-        logger.error(f"Ошибка сохранения кредитов: {e}")
+async def get_credits(user_id: int) -> int:
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow("SELECT credits FROM users WHERE user_id = $1", user_id)
+        if row is None:
+            return -1
+        return row["credits"]
 
 
-credits_db: dict = load_credits()
+async def init_user(user_id: int) -> bool:
+    async with db_pool.acquire() as conn:
+        existing = await conn.fetchrow("SELECT user_id FROM users WHERE user_id = $1", user_id)
+        if existing is None:
+            await conn.execute(
+                "INSERT INTO users (user_id, credits) VALUES ($1, $2)",
+                user_id, FREE_CREDITS
+            )
+            return True
+        return False
 
 
-def get_credits(user_id: int) -> int:
-    return credits_db.get(str(user_id), -1)
+async def add_credits(user_id: int, count: int):
+    async with db_pool.acquire() as conn:
+        await conn.execute("""
+            INSERT INTO users (user_id, credits) VALUES ($1, $2)
+            ON CONFLICT (user_id) DO UPDATE SET credits = users.credits + $2
+        """, user_id, count)
 
 
-def add_credits(user_id: int, count: int):
-    key = str(user_id)
-    current = credits_db.get(key, 0)
-    if current == -1:
-        current = 0
-    credits_db[key] = current + count
-    save_credits(credits_db)
-
-
-def init_user(user_id: int):
-    key = str(user_id)
-    if key not in credits_db:
-        credits_db[key] = FREE_CREDITS
-        save_credits(credits_db)
-        return True
-    return False
-
-
-def use_credit(user_id: int) -> bool:
-    key = str(user_id)
-    if credits_db.get(key, 0) > 0:
-        credits_db[key] -= 1
-        save_credits(credits_db)
-        return True
-    return False
+async def use_credit(user_id: int) -> bool:
+    async with db_pool.acquire() as conn:
+        result = await conn.execute("""
+            UPDATE users SET credits = credits - 1
+            WHERE user_id = $1 AND credits > 0
+        """, user_id)
+        return result == "UPDATE 1"
 
 
 def compress_image(image_bytes: bytes, max_size: int = 1024) -> str:
@@ -107,7 +108,6 @@ def compress_image(image_bytes: bytes, max_size: int = 1024) -> str:
 
 
 def detect_image_size(prompt: str) -> tuple[str, str]:
-    """Возвращает (fal_size, openai_size)"""
     prompt_lower = prompt.lower()
 
     vertical_keywords = [
@@ -128,20 +128,14 @@ def detect_image_size(prompt: str) -> tuple[str, str]:
 
     for kw in vertical_keywords:
         if kw in prompt_lower:
-            logger.info("Размер: portrait_16_9 / 1024x1536")
             return "portrait_16_9", "1024x1536"
-
     for kw in landscape_keywords:
         if kw in prompt_lower:
-            logger.info("Размер: landscape_4_3 / 1536x1024")
             return "landscape_4_3", "1536x1024"
-
     for kw in portrait_keywords:
         if kw in prompt_lower:
-            logger.info("Размер: portrait_4_3 / 1024x1536")
             return "portrait_4_3", "1024x1536"
 
-    logger.info("Размер: square_hd / 1024x1024")
     return "square_hd", "1024x1024"
 
 
@@ -218,8 +212,6 @@ async def generate_with_flux_pulid(image_base64: str, prompt: str) -> bytes:
         except Exception:
             raise ValueError(f"Неожиданный ответ fal.ai: {gen_response.text[:200]}")
 
-        logger.info(f"Ответ fal.ai: {gen_data}")
-
         if "images" not in gen_data:
             raise ValueError(f"Ошибка fal.ai: {gen_data}")
 
@@ -249,8 +241,8 @@ class PaymentState(StatesGroup):
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     user_id = message.from_user.id
-    is_new = init_user(user_id)
-    credits = get_credits(user_id)
+    is_new = await init_user(user_id)
+    credits = await get_credits(user_id)
 
     if is_new:
         await message.answer(
@@ -282,8 +274,8 @@ async def cmd_buy(message: types.Message):
 
 @dp.message(Command("balance"))
 async def cmd_balance(message: types.Message):
-    init_user(message.from_user.id)
-    credits = get_credits(message.from_user.id)
+    await init_user(message.from_user.id)
+    credits = await get_credits(message.from_user.id)
     await message.answer(f"💳 У тебя *{credits} генераций*", parse_mode="Markdown")
 
 
@@ -363,13 +355,14 @@ async def cmd_add_credits(message: types.Message):
         parts = message.text.split("_")
         target_id = int(parts[1])
         count = int(parts[2])
-        add_credits(target_id, count)
+        await add_credits(target_id, count)
+        credits = await get_credits(target_id)
         await message.answer(f"✅ Начислено {count} генераций пользователю {target_id}")
         await bot.send_message(
             target_id,
             f"✅ Оплата подтверждена!\n"
             f"Начислено *{count} генераций*.\n"
-            f"Теперь у тебя: *{get_credits(target_id)} генераций* 🎨",
+            f"Теперь у тебя: *{credits} генераций* 🎨",
             parse_mode="Markdown"
         )
     except Exception as e:
@@ -380,7 +373,7 @@ async def cmd_add_credits(message: types.Message):
 @dp.message()
 async def handle_message(message: types.Message):
     user_id = message.from_user.id
-    init_user(user_id)
+    await init_user(user_id)
 
     if message.photo and not message.caption:
         try:
@@ -402,7 +395,7 @@ async def handle_message(message: types.Message):
 
     if message.text:
         prompt = message.text.strip()
-        credits = get_credits(user_id)
+        credits = await get_credits(user_id)
 
         if credits <= 0:
             await message.answer(
@@ -421,8 +414,8 @@ async def handle_message(message: types.Message):
             else:
                 image_bytes = await generate_text_only(prompt)
 
-            use_credit(user_id)
-            remaining = get_credits(user_id)
+            await use_credit(user_id)
+            remaining = await get_credits(user_id)
 
             photo_file = BufferedInputFile(image_bytes, filename="image.png")
             await message.answer_photo(
@@ -445,6 +438,7 @@ async def handle_message(message: types.Message):
 
 
 async def main():
+    await init_db()
     logger.info("Бот запущен!")
     await dp.start_polling(bot)
 
