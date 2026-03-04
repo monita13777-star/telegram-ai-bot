@@ -4,6 +4,8 @@ import base64
 import logging
 import httpx
 import json
+from io import BytesIO
+from PIL import Image
 from aiogram import Bot, Dispatcher, types
 from aiogram.types import BufferedInputFile, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.filters import Command
@@ -94,6 +96,57 @@ def use_credit(user_id: int) -> bool:
     return False
 
 
+def compress_image(image_bytes: bytes, max_size: int = 1024) -> str:
+    img = Image.open(BytesIO(image_bytes))
+    if img.mode != "RGB":
+        img = img.convert("RGB")
+    img.thumbnail((max_size, max_size), Image.LANCZOS)
+    buffer = BytesIO()
+    img.save(buffer, format="JPEG", quality=85)
+    return base64.b64encode(buffer.getvalue()).decode("utf-8")
+
+
+def detect_image_size(prompt: str) -> str:
+    """Автоматически определяем размер из промпта"""
+    prompt_lower = prompt.lower()
+
+    portrait_keywords = [
+        "portrait", "close-up", "closeup", "face", "headshot", "selfie",
+        "портрет", "крупный план", "лицо", "вертикальный", "вертикальное",
+        "profile", "профиль", "bust", "бюст"
+    ]
+
+    landscape_keywords = [
+        "landscape", "panorama", "wide", "city", "street", "nature", "ocean",
+        "пейзаж", "панорама", "широкий", "горизонтальный", "город", "улица",
+        "природа", "океан", "море", "beach", "пляж", "forest", "лес",
+        "mountain", "гора", "sky", "небо"
+    ]
+
+    vertical_keywords = [
+        "full body", "full-body", "standing", "walking", "в полный рост",
+        "стоит", "идёт", "идет", "whole body", "весь рост"
+    ]
+
+    for kw in vertical_keywords:
+        if kw in prompt_lower:
+            logger.info(f"Размер: portrait_16_9 (full body)")
+            return "portrait_16_9"
+
+    for kw in landscape_keywords:
+        if kw in prompt_lower:
+            logger.info(f"Размер: landscape_16_9 (пейзаж)")
+            return "landscape_16_9"
+
+    for kw in portrait_keywords:
+        if kw in prompt_lower:
+            logger.info(f"Размер: portrait_4_3 (портрет)")
+            return "portrait_4_3"
+
+    logger.info("Размер: square_hd (по умолчанию)")
+    return "square_hd"
+
+
 def tariff_keyboard() -> InlineKeyboardMarkup:
     buttons = []
     for key, t in TARIFFS.items():
@@ -135,6 +188,7 @@ def translate_prompt(user_prompt: str) -> str:
 
 async def generate_with_flux_pulid(image_base64: str, prompt: str) -> bytes:
     translated_prompt = translate_prompt(prompt)
+    image_size = detect_image_size(prompt + " " + translated_prompt)
     image_data_uri = f"data:image/jpeg;base64,{image_base64}"
 
     async with httpx.AsyncClient(timeout=180) as http:
@@ -151,11 +205,21 @@ async def generate_with_flux_pulid(image_base64: str, prompt: str) -> bytes:
                 "guidance_scale": 7,
                 "true_cfg": 1,
                 "id_weight": 1.0,
-                "image_size": "square_hd",
+                "image_size": image_size,
                 "num_images": 1,
             }
         )
-        gen_data = gen_response.json()
+
+        logger.info(f"fal.ai статус: {gen_response.status_code}")
+
+        if gen_response.status_code == 500:
+            raise ValueError("Сервер fal.ai временно недоступен. Попробуйте ещё раз через минуту.")
+
+        try:
+            gen_data = gen_response.json()
+        except Exception:
+            raise ValueError(f"Неожиданный ответ fal.ai: {gen_response.text[:200]}")
+
         logger.info(f"Ответ fal.ai: {gen_data}")
 
         if "images" not in gen_data:
@@ -168,10 +232,21 @@ async def generate_with_flux_pulid(image_base64: str, prompt: str) -> bytes:
 
 async def generate_text_only(prompt: str) -> bytes:
     translated_prompt = translate_prompt(prompt)
+    image_size = detect_image_size(prompt + " " + translated_prompt)
+
+    size_map = {
+        "square_hd": "1024x1024",
+        "portrait_4_3": "1024x1536",
+        "portrait_16_9": "1024x1792",
+        "landscape_4_3": "1536x1024",
+        "landscape_16_9": "1792x1024",
+    }
+    openai_size = size_map.get(image_size, "1024x1024")
+
     result = client.images.generate(
         model="gpt-image-1",
         prompt=translated_prompt,
-        size="1024x1024",
+        size=openai_size,
         quality="high",
     )
     image_base64 = result.data[0].b64_json
@@ -324,7 +399,7 @@ async def handle_message(message: types.Message):
             file = await bot.get_file(photo.file_id)
             downloaded = await bot.download_file(file.file_path)
             image_bytes = downloaded.read()
-            image_base64 = base64.b64encode(image_bytes).decode("utf-8")
+            image_base64 = compress_image(image_bytes)
             user_photos[user_id] = image_base64
             await message.answer(
                 "📸 Фото сохранено!\n\nНапишите описание — как изменить образ.\n"
@@ -374,6 +449,8 @@ async def handle_message(message: types.Message):
                 await message.answer("⚠️ Запрос нарушает правила контента. Попробуйте переформулировать.")
             elif "billing" in err.lower() or "quota" in err.lower():
                 await message.answer("💳 Проблема с балансом. Проверьте аккаунт.")
+            elif "временно недоступен" in err:
+                await message.answer("⚠️ " + err)
             else:
                 await message.answer(f"❌ Ошибка:\n`{err[:300]}`", parse_mode="Markdown")
 
