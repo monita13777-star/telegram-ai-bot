@@ -104,7 +104,7 @@ def tariff_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
-def translate_and_enhance(user_prompt: str) -> str:
+def translate_prompt(user_prompt: str) -> str:
     try:
         response = client.chat.completions.create(
             model="gpt-4o",
@@ -112,19 +112,21 @@ def translate_and_enhance(user_prompt: str) -> str:
                 {
                     "role": "system",
                     "content": (
-                        "You are a professional image prompt translator and enhancer. "
-                        "Translate the user's prompt to English if needed. "
-                        "Then enhance it to be vivid and detailed for image generation. "
-                        "Keep it under 150 words. Return ONLY the enhanced English prompt, nothing else."
+                        "You are a professional image prompt translator. "
+                        "If the prompt is in Russian, translate it to English. "
+                        "If it is already in English, return it as-is without changes. "
+                        "Do NOT summarize, shorten, or lose any details. "
+                        "Preserve ALL objects, accessories, clothing, atmosphere, and scene details exactly. "
+                        "Return ONLY the translated prompt, nothing else."
                     )
                 },
                 {"role": "user", "content": user_prompt}
             ],
-            max_tokens=250,
-            temperature=0.7
+            max_tokens=800,
+            temperature=0.3
         )
         translated = response.choices[0].message.content.strip()
-        logger.info(f"Промпт: '{user_prompt}' -> '{translated}'")
+        logger.info(f"Промпт переведён: '{user_prompt[:50]}...' -> '{translated[:50]}...'")
         return translated
     except Exception as e:
         logger.warning(f"Перевод не удался: {e}")
@@ -132,7 +134,7 @@ def translate_and_enhance(user_prompt: str) -> str:
 
 
 async def generate_with_flux_pulid(image_base64: str, prompt: str) -> bytes:
-    translated_prompt = translate_and_enhance(prompt)
+    translated_prompt = translate_prompt(prompt)
     image_data_uri = f"data:image/jpeg;base64,{image_base64}"
 
     async with httpx.AsyncClient(timeout=180) as http:
@@ -143,7 +145,7 @@ async def generate_with_flux_pulid(image_base64: str, prompt: str) -> bytes:
                 "Content-Type": "application/json"
             },
             json={
-                "prompt": translated_prompt + ", photorealistic, RAW photo, 8K resolution, sharp focus, natural skin texture, professional photography",
+                "prompt": translated_prompt + ", photorealistic, RAW photo, 8K resolution, sharp focus, natural skin texture, professional photography, cinematic lighting",
                 "reference_image_url": image_data_uri,
                 "num_inference_steps": 30,
                 "guidance_scale": 7,
@@ -162,6 +164,18 @@ async def generate_with_flux_pulid(image_base64: str, prompt: str) -> bytes:
         result_url = gen_data["images"][0]["url"]
         img_response = await http.get(result_url)
         return img_response.content
+
+
+async def generate_text_only(prompt: str) -> bytes:
+    translated_prompt = translate_prompt(prompt)
+    result = client.images.generate(
+        model="gpt-image-1",
+        prompt=translated_prompt,
+        size="1024x1024",
+        quality="high",
+    )
+    image_base64 = result.data[0].b64_json
+    return base64.b64decode(image_base64)
 
 
 class PaymentState(StatesGroup):
@@ -341,15 +355,7 @@ async def handle_message(message: types.Message):
                 image_bytes = await generate_with_flux_pulid(saved_base64, prompt)
                 del user_photos[user_id]
             else:
-                translated_prompt = translate_and_enhance(prompt)
-                result = client.images.generate(
-                    model="gpt-image-1",
-                    prompt=translated_prompt,
-                    size="1024x1024",
-                    quality="high",
-                )
-                image_base64 = result.data[0].b64_json
-                image_bytes = base64.b64decode(image_base64)
+                image_bytes = await generate_text_only(prompt)
 
             use_credit(user_id)
             remaining = get_credits(user_id)
