@@ -22,7 +22,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 FAL_API_KEY = os.getenv("FAL_API_KEY")
 PAYMENT_PHONE = os.getenv("PAYMENT_PHONE")
-ADMIN_ID = 1991186266  # твой Telegram ID
+ADMIN_ID = 1991186266
 
 TARIFFS = {
     "1": {"name": "1 фото", "count": 1, "price": 29},
@@ -77,7 +77,6 @@ def add_credits(user_id: int, count: int):
 
 
 def init_user(user_id: int):
-    """Даём 3 бесплатные генерации новому пользователю"""
     key = str(user_id)
     if key not in credits_db:
         credits_db[key] = FREE_CREDITS
@@ -144,12 +143,12 @@ async def generate_with_flux_pulid(image_base64: str, prompt: str) -> bytes:
                 "Content-Type": "application/json"
             },
             json={
-                "prompt": translated_prompt,
+                "prompt": translated_prompt + ", photorealistic, RAW photo, 8K resolution, sharp focus, natural skin texture, professional photography",
                 "reference_image_url": image_data_uri,
-                "num_inference_steps": 20,
-                "guidance_scale": 4,
+                "num_inference_steps": 30,
+                "guidance_scale": 7,
                 "true_cfg": 1,
-                "id_weight": 1.0,
+                "id_weight": 1.5,
                 "image_size": "square_hd",
                 "num_images": 1,
             }
