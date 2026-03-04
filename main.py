@@ -3,6 +3,7 @@ import os
 import base64
 import logging
 import httpx
+import json
 from aiogram import Bot, Dispatcher, types
 from aiogram.types import BufferedInputFile, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.filters import Command
@@ -21,8 +22,8 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 FAL_API_KEY = os.getenv("FAL_API_KEY")
 PAYMENT_PHONE = os.getenv("PAYMENT_PHONE")
+ADMIN_ID = 1991186266  # твой Telegram ID
 
-# Тарифы: название, количество генераций, цена
 TARIFFS = {
     "1": {"name": "1 фото", "count": 1, "price": 29},
     "10": {"name": "10 фото", "count": 10, "price": 199},
@@ -30,34 +31,66 @@ TARIFFS = {
     "100": {"name": "100 фото", "count": 100, "price": 1490},
 }
 
+CREDITS_FILE = "/tmp/credits.json"
+FREE_CREDITS = 3
+
 bot = Bot(token=BOT_TOKEN)
 storage = MemoryStorage()
 dp = Dispatcher(storage=storage)
 client = OpenAI(api_key=OPENAI_API_KEY)
 
-# user_id -> base64 фото
 user_photos: dict[int, str] = {}
-# user_id -> количество оставшихся генераций
-user_credits: dict[int, int] = {}
-# user_id -> ожидаемый тариф (для проверки оплаты)
-user_pending: dict[int, dict] = {}
 
 
-class PaymentState(StatesGroup):
-    waiting_receipt = State()
+def load_credits() -> dict:
+    try:
+        if os.path.exists(CREDITS_FILE):
+            with open(CREDITS_FILE, "r") as f:
+                return json.load(f)
+    except Exception as e:
+        logger.error(f"Ошибка загрузки кредитов: {e}")
+    return {}
+
+
+def save_credits(data: dict):
+    try:
+        with open(CREDITS_FILE, "w") as f:
+            json.dump(data, f)
+    except Exception as e:
+        logger.error(f"Ошибка сохранения кредитов: {e}")
+
+
+credits_db: dict = load_credits()
 
 
 def get_credits(user_id: int) -> int:
-    return user_credits.get(user_id, 0)
+    return credits_db.get(str(user_id), -1)
 
 
 def add_credits(user_id: int, count: int):
-    user_credits[user_id] = user_credits.get(user_id, 0) + count
+    key = str(user_id)
+    current = credits_db.get(key, 0)
+    if current == -1:
+        current = 0
+    credits_db[key] = current + count
+    save_credits(credits_db)
+
+
+def init_user(user_id: int):
+    """Даём 3 бесплатные генерации новому пользователю"""
+    key = str(user_id)
+    if key not in credits_db:
+        credits_db[key] = FREE_CREDITS
+        save_credits(credits_db)
+        return True
+    return False
 
 
 def use_credit(user_id: int) -> bool:
-    if user_credits.get(user_id, 0) > 0:
-        user_credits[user_id] -= 1
+    key = str(user_id)
+    if credits_db.get(key, 0) > 0:
+        credits_db[key] -= 1
+        save_credits(credits_db)
         return True
     return False
 
@@ -132,18 +165,34 @@ async def generate_with_flux_pulid(image_base64: str, prompt: str) -> bytes:
         return img_response.content
 
 
+class PaymentState(StatesGroup):
+    waiting_receipt = State()
+
+
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
-    credits = get_credits(message.from_user.id)
-    await message.answer(
-        f"👋 Привет! Я генерирую изображения с помощью ИИ.\n\n"
-        f"💳 У тебя сейчас: *{credits} генераций*\n\n"
-        "🖼 *Без фото* — напиши текст, создам картинку.\n\n"
-        "🧑‍🎨 *С твоим фото* — отправь фото + описание, перенесу тебя в новую сцену с сохранением лица.\n\n"
-        "💰 Чтобы пополнить генерации — нажми /buy\n"
-        "/reset — сбросить сохранённое фото",
-        parse_mode="Markdown"
-    )
+    user_id = message.from_user.id
+    is_new = init_user(user_id)
+    credits = get_credits(user_id)
+
+    if is_new:
+        await message.answer(
+            f"👋 Привет! Я генерирую изображения с помощью ИИ.\n\n"
+            f"🎁 Тебе начислено *{FREE_CREDITS} бесплатные генерации* — попробуй!\n\n"
+            "🖼 *Без фото* — напиши текст, создам картинку.\n\n"
+            "🧑‍🎨 *С твоим фото* — отправь фото + описание, перенесу тебя в новую сцену с сохранением лица.\n\n"
+            "💰 Купить генерации — /buy\n"
+            "💳 Баланс — /balance",
+            parse_mode="Markdown"
+        )
+    else:
+        await message.answer(
+            f"👋 Привет! Рада тебя видеть снова!\n\n"
+            f"💳 У тебя: *{credits} генераций*\n\n"
+            "💰 Купить генерации — /buy\n"
+            "💳 Баланс — /balance",
+            parse_mode="Markdown"
+        )
 
 
 @dp.message(Command("buy"))
@@ -156,6 +205,7 @@ async def cmd_buy(message: types.Message):
 
 @dp.message(Command("balance"))
 async def cmd_balance(message: types.Message):
+    init_user(message.from_user.id)
     credits = get_credits(message.from_user.id)
     await message.answer(f"💳 У тебя *{credits} генераций*", parse_mode="Markdown")
 
@@ -174,13 +224,11 @@ async def process_buy(callback: types.CallbackQuery, state: FSMContext):
         await callback.answer("Ошибка")
         return
 
-    user_pending[callback.from_user.id] = tariff
-
     await callback.message.answer(
         f"💳 *{tariff['name']} — {tariff['price']}₽*\n\n"
         f"Переведи *{tariff['price']}₽* на Сбер:\n"
         f"📱 `{PAYMENT_PHONE}`\n\n"
-        f"В комментарии к переводу укажи свой Telegram ID:\n"
+        f"В комментарии укажи свой Telegram ID:\n"
         f"`{callback.from_user.id}`\n\n"
         f"После оплаты нажми кнопку ниже 👇",
         parse_mode="Markdown",
@@ -194,15 +242,9 @@ async def process_buy(callback: types.CallbackQuery, state: FSMContext):
 @dp.callback_query(lambda c: c.data.startswith("paid_"))
 async def process_paid(callback: types.CallbackQuery, state: FSMContext):
     tariff_key = callback.data.split("_")[1]
-    tariff = TARIFFS.get(tariff_key)
-    user_id = callback.from_user.id
-
     await state.set_state(PaymentState.waiting_receipt)
     await state.update_data(tariff_key=tariff_key)
-
-    await callback.message.answer(
-        "📸 Отправь скриншот чека из Сбера — я проверю и начислю генерации!",
-    )
+    await callback.message.answer("📸 Отправь скриншот чека!")
     await callback.answer()
 
 
@@ -214,36 +256,32 @@ async def process_receipt(message: types.Message, state: FSMContext):
     user_id = message.from_user.id
 
     if message.photo:
-        # Уведомляем пользователя что чек получен
         await message.answer(
-            "⏳ Чек получен! Проверяем оплату — обычно это занимает до 15 минут.\n"
-            "Как только подтвердим — начислим генерации и уведомим тебя!"
+            "⏳ Чек получен! Проверяем оплату — обычно до 15 минут.\n"
+            "Уведомим тебя как только начислим генерации!"
         )
-
-        # Отправляем себе чек для проверки
-        admin_id = 1991186266  # твой Telegram ID
         try:
             await bot.send_photo(
-                chat_id=admin_id,
+                chat_id=ADMIN_ID,
                 photo=message.photo[-1].file_id,
                 caption=(
                     f"💳 Новая оплата!\n"
-                    f"👤 Пользователь: @{message.from_user.username} (ID: {user_id})\n"
-                    f"📦 Тариф: {tariff['name']} — {tariff['price']}₽\n"
+                    f"👤 @{message.from_user.username} (ID: {user_id})\n"
+                    f"📦 {tariff['name']} — {tariff['price']}₽\n"
                     f"➕ Начислить: /add_{user_id}_{tariff['count']}"
                 )
             )
         except Exception as e:
-            logger.error(f"Не удалось отправить уведомление: {e}")
-
+            logger.error(f"Ошибка уведомления: {e}")
         await state.clear()
     else:
-        await message.answer("Пожалуйста, отправь именно скриншот (фото) чека.")
+        await message.answer("Пожалуйста, отправь именно фото чека.")
 
 
 @dp.message(lambda m: m.text and m.text.startswith("/add_"))
 async def cmd_add_credits(message: types.Message):
-    # Команда для ручного начисления: /add_USER_ID_COUNT
+    if message.from_user.id != ADMIN_ID:
+        return
     try:
         parts = message.text.split("_")
         target_id = int(parts[1])
@@ -252,9 +290,9 @@ async def cmd_add_credits(message: types.Message):
         await message.answer(f"✅ Начислено {count} генераций пользователю {target_id}")
         await bot.send_message(
             target_id,
-            f"✅ Оплата подтверждена! Начислено *{count} генераций*.\n"
-            f"Теперь у тебя: *{get_credits(target_id)} генераций*\n\n"
-            f"Отправь фото или напиши текст для генерации! 🎨",
+            f"✅ Оплата подтверждена!\n"
+            f"Начислено *{count} генераций*.\n"
+            f"Теперь у тебя: *{get_credits(target_id)} генераций* 🎨",
             parse_mode="Markdown"
         )
     except Exception as e:
@@ -265,6 +303,7 @@ async def cmd_add_credits(message: types.Message):
 @dp.message()
 async def handle_message(message: types.Message):
     user_id = message.from_user.id
+    init_user(user_id)
 
     if message.photo and not message.caption:
         try:
@@ -280,15 +319,14 @@ async def handle_message(message: types.Message):
                 parse_mode="Markdown"
             )
         except Exception as e:
-            logger.error(f"Ошибка сохранения фото: {e}")
-            await message.answer("❌ Не удалось обработать фото. Попробуйте ещё раз.")
+            logger.error(f"Ошибка фото: {e}")
+            await message.answer("❌ Не удалось обработать фото.")
         return
 
     if message.text:
         prompt = message.text.strip()
-
-        # Проверяем баланс
         credits = get_credits(user_id)
+
         if credits <= 0:
             await message.answer(
                 "💳 У тебя закончились генерации!\n\n"
@@ -296,7 +334,7 @@ async def handle_message(message: types.Message):
             )
             return
 
-        await message.answer(f"⏳ Генерирую... (осталось генераций: {credits})")
+        await message.answer(f"⏳ Генерирую... (осталось: {credits})")
 
         try:
             if user_id in user_photos:
@@ -320,7 +358,7 @@ async def handle_message(message: types.Message):
             photo_file = BufferedInputFile(image_bytes, filename="image.png")
             await message.answer_photo(
                 photo_file,
-                caption=f"✅ Готово! Осталось генераций: *{remaining}*",
+                caption=f"✅ Готово! Осталось: *{remaining} генераций*",
                 parse_mode="Markdown"
             )
 
