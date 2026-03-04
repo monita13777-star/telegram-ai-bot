@@ -106,45 +106,43 @@ def compress_image(image_bytes: bytes, max_size: int = 1024) -> str:
     return base64.b64encode(buffer.getvalue()).decode("utf-8")
 
 
-def detect_image_size(prompt: str) -> str:
-    """Автоматически определяем размер из промпта"""
+def detect_image_size(prompt: str) -> tuple[str, str]:
+    """Возвращает (fal_size, openai_size)"""
     prompt_lower = prompt.lower()
 
-    portrait_keywords = [
-        "portrait", "close-up", "closeup", "face", "headshot", "selfie",
-        "портрет", "крупный план", "лицо", "вертикальный", "вертикальное",
-        "profile", "профиль", "bust", "бюст"
+    vertical_keywords = [
+        "full body", "full-body", "standing", "walking", "в полный рост",
+        "стоит", "идёт", "идет", "whole body", "весь рост"
     ]
-
     landscape_keywords = [
         "landscape", "panorama", "wide", "city", "street", "nature", "ocean",
         "пейзаж", "панорама", "широкий", "горизонтальный", "город", "улица",
         "природа", "океан", "море", "beach", "пляж", "forest", "лес",
         "mountain", "гора", "sky", "небо"
     ]
-
-    vertical_keywords = [
-        "full body", "full-body", "standing", "walking", "в полный рост",
-        "стоит", "идёт", "идет", "whole body", "весь рост"
+    portrait_keywords = [
+        "portrait", "close-up", "closeup", "face", "headshot", "selfie",
+        "портрет", "крупный план", "лицо", "вертикальный",
+        "profile", "профиль"
     ]
 
     for kw in vertical_keywords:
         if kw in prompt_lower:
-            logger.info(f"Размер: portrait_16_9 (full body)")
-            return "portrait_16_9"
+            logger.info("Размер: portrait_16_9 / 1024x1536")
+            return "portrait_16_9", "1024x1536"
 
     for kw in landscape_keywords:
         if kw in prompt_lower:
-            logger.info(f"Размер: landscape_16_9 (пейзаж)")
-            return "landscape_16_9"
+            logger.info("Размер: landscape_4_3 / 1536x1024")
+            return "landscape_4_3", "1536x1024"
 
     for kw in portrait_keywords:
         if kw in prompt_lower:
-            logger.info(f"Размер: portrait_4_3 (портрет)")
-            return "portrait_4_3"
+            logger.info("Размер: portrait_4_3 / 1024x1536")
+            return "portrait_4_3", "1024x1536"
 
-    logger.info("Размер: square_hd (по умолчанию)")
-    return "square_hd"
+    logger.info("Размер: square_hd / 1024x1024")
+    return "square_hd", "1024x1024"
 
 
 def tariff_keyboard() -> InlineKeyboardMarkup:
@@ -188,7 +186,7 @@ def translate_prompt(user_prompt: str) -> str:
 
 async def generate_with_flux_pulid(image_base64: str, prompt: str) -> bytes:
     translated_prompt = translate_prompt(prompt)
-    image_size = detect_image_size(prompt + " " + translated_prompt)
+    fal_size, _ = detect_image_size(prompt + " " + translated_prompt)
     image_data_uri = f"data:image/jpeg;base64,{image_base64}"
 
     async with httpx.AsyncClient(timeout=180) as http:
@@ -205,7 +203,7 @@ async def generate_with_flux_pulid(image_base64: str, prompt: str) -> bytes:
                 "guidance_scale": 7,
                 "true_cfg": 1,
                 "id_weight": 1.0,
-                "image_size": image_size,
+                "image_size": fal_size,
                 "num_images": 1,
             }
         )
@@ -232,16 +230,7 @@ async def generate_with_flux_pulid(image_base64: str, prompt: str) -> bytes:
 
 async def generate_text_only(prompt: str) -> bytes:
     translated_prompt = translate_prompt(prompt)
-    image_size = detect_image_size(prompt + " " + translated_prompt)
-
-    size_map = {
-        "square_hd": "1024x1024",
-        "portrait_4_3": "1024x1536",
-        "portrait_16_9": "1024x1792",
-        "landscape_4_3": "1536x1024",
-        "landscape_16_9": "1792x1024",
-    }
-    openai_size = size_map.get(image_size, "1024x1024")
+    _, openai_size = detect_image_size(prompt + " " + translated_prompt)
 
     result = client.images.generate(
         model="gpt-image-1",
