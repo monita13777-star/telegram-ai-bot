@@ -191,7 +191,7 @@ async def generate_with_flux_pulid(image_base64: str, prompt: str) -> bytes:
                 "Content-Type": "application/json"
             },
             json={
-                "prompt": translated_prompt + ", photorealistic, RAW photo, 8K resolution, sharp focus, natural skin texture, professional photography, cinematic lighting",
+                "prompt": translated_prompt + ", photorealistic, RAW photo, 8K resolution, sharp focus, natural skin texture, professional photography, cinematic lighting, preserve exact body proportions and figure, same body type as reference photo, do not slim or alter body shape",
                 "reference_image_url": image_data_uri,
                 "num_inference_steps": 30,
                 "guidance_scale": 7,
