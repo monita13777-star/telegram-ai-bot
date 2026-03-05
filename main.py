@@ -3,7 +3,6 @@ import os
 import base64
 import logging
 import httpx
-import json
 import asyncpg
 from io import BytesIO
 from PIL import Image
@@ -250,6 +249,7 @@ async def cmd_start(message: types.Message):
             f"🎁 Тебе начислено *{FREE_CREDITS} бесплатные генерации* — попробуй!\n\n"
             "🖼 *Без фото* — напиши текст, создам картинку.\n\n"
             "🧑‍🎨 *С твоим фото* — отправь фото + описание, перенесу тебя в новую сцену с сохранением лица.\n\n"
+            "⚠️ Для генерации с фото нужно *реальное фото* — рисунки и аниме не поддерживаются.\n\n"
             "💰 Купить генерации — /buy\n"
             "💳 Баланс — /balance",
             parse_mode="Markdown"
@@ -385,7 +385,8 @@ async def handle_message(message: types.Message):
             user_photos[user_id] = image_base64
             await message.answer(
                 "📸 Фото сохранено!\n\nНапишите описание — как изменить образ.\n"
-                "Можно на *русском* или *английском* 😊",
+                "Можно на *русском* или *английском* 😊\n\n"
+                "⚠️ *Важно:* подходят только реальные фото людей — рисунки и аниме не поддерживаются.",
                 parse_mode="Markdown"
             )
         except Exception as e:
@@ -427,7 +428,12 @@ async def handle_message(message: types.Message):
         except Exception as e:
             logger.error(f"[{user_id}] Ошибка: {e}", exc_info=True)
             err = str(e)
-            if "content_policy" in err.lower() or "safety" in err.lower():
+            if "no face detected" in err.lower() or "face" in err.lower():
+                await message.answer(
+                    "⚠️ Не удалось найти лицо на фото.\n\n"
+                    "Попробуйте другое фото — реальный портрет с чётким лицом 😊"
+                )
+            elif "content_policy" in err.lower() or "safety" in err.lower():
                 await message.answer("⚠️ Запрос нарушает правила контента. Попробуйте переформулировать.")
             elif "billing" in err.lower() or "quota" in err.lower():
                 await message.answer("💳 Проблема с балансом. Проверьте аккаунт.")
