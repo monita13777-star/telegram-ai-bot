@@ -36,6 +36,25 @@ TARIFFS = {
 
 FREE_CREDITS = 3
 
+MARCH8_TEMPLATES = {
+    "m8_tulips": {
+        "name": "🌷 С букетом тюльпанов",
+        "prompt": "The person from my photo without changing facial features, hair color or eye color. A woman stands holding a lush bouquet of pink and white tulips tied with a satin ribbon. Background: large decorative number '8' made of fresh flowers and pink balloons, soft bokeh. Spring holiday atmosphere — flower petals in the air, gentle pink-peach light. Outfit — elegant light dress. Shot on Canon EOS R5 with 85mm f/1.4 lens, soft studio lighting with warm pink accent, natural shadows, depth of field. Professional fashion photography, magazine quality, 8K. Text 'С 8 Марта!' in elegant gold letters at the top of the image."
+    },
+    "m8_garden": {
+        "name": "🌸 В цветущем саду",
+        "prompt": "The person from my photo without changing facial features, hair color or eye color. A woman stands in a blooming spring garden surrounded by pink cherry blossoms and tulips. Gentle morning light filtering through flower petals, dreamy romantic atmosphere. Elegant floral dress, hair adorned with small flowers. Shot on Sony A7R IV with 50mm f/1.2 lens, golden hour lighting, soft bokeh background. Text 'С 8 Марта!' in delicate pink letters. Professional photography, magazine quality, 8K."
+    },
+    "m8_luxury": {
+        "name": "✨ Роскошный портрет",
+        "prompt": "The person from my photo without changing facial features, hair color or eye color. A glamorous woman holding a large bouquet of red roses, wearing an elegant evening gown. Background of golden bokeh lights and rose petals falling. Luxurious atmosphere, professional studio setup. Shot on Hasselblad H6D with 100mm f/2.2 lens, dramatic studio lighting with soft fill. Text 'С 8 Марта!' in golden elegant script at top. High fashion photography, Vogue style, 8K resolution."
+    },
+    "m8_minimal": {
+        "name": "🤍 Нежный минимализм",
+        "prompt": "The person from my photo without changing facial features, hair color or eye color. A woman in a simple white elegant dress holding a single pink peony against a clean white background with soft pink accents. Minimalist aesthetic, soft natural window light. Shot on Leica Q2 with 28mm f/1.7 lens, clean bright airy photography style. Text 'С 8 Марта!' in soft rose gold letters. Modern minimalist fashion photography, 8K."
+    },
+}
+
 bot = Bot(token=BOT_TOKEN)
 storage = MemoryStorage()
 dp = Dispatcher(storage=storage)
@@ -108,7 +127,6 @@ def compress_image(image_bytes: bytes, max_size: int = 1024) -> str:
 
 def detect_image_size(prompt: str) -> tuple[str, str]:
     prompt_lower = prompt.lower()
-
     vertical_keywords = [
         "full body", "full-body", "standing", "walking", "в полный рост",
         "стоит", "идёт", "идет", "whole body", "весь рост"
@@ -124,7 +142,6 @@ def detect_image_size(prompt: str) -> tuple[str, str]:
         "портрет", "крупный план", "лицо", "вертикальный",
         "profile", "профиль"
     ]
-
     for kw in vertical_keywords:
         if kw in prompt_lower:
             return "portrait_16_9", "1024x1536"
@@ -134,7 +151,6 @@ def detect_image_size(prompt: str) -> tuple[str, str]:
     for kw in portrait_keywords:
         if kw in prompt_lower:
             return "portrait_4_3", "1024x1536"
-
     return "square_hd", "1024x1024"
 
 
@@ -144,6 +160,16 @@ def tariff_keyboard() -> InlineKeyboardMarkup:
         buttons.append([InlineKeyboardButton(
             text=f"{t['name']} — {t['price']}₽",
             callback_data=f"buy_{key}"
+        )])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def march8_keyboard() -> InlineKeyboardMarkup:
+    buttons = []
+    for key, t in MARCH8_TEMPLATES.items():
+        buttons.append([InlineKeyboardButton(
+            text=t["name"],
+            callback_data=f"m8_{key}"
         )])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
@@ -178,8 +204,7 @@ def translate_prompt(user_prompt: str) -> str:
 
 
 async def generate_with_flux_pulid(image_base64: str, prompt: str) -> bytes:
-    translated_prompt = translate_prompt(prompt)
-    fal_size, _ = detect_image_size(prompt + " " + translated_prompt)
+    fal_size, _ = detect_image_size(prompt)
     image_data_uri = f"data:image/jpeg;base64,{image_base64}"
 
     async with httpx.AsyncClient(timeout=180) as http:
@@ -190,7 +215,7 @@ async def generate_with_flux_pulid(image_base64: str, prompt: str) -> bytes:
                 "Content-Type": "application/json"
             },
             json={
-                "prompt": translated_prompt + ", photorealistic, RAW photo, 8K resolution, sharp focus, natural skin texture, professional photography, cinematic lighting, preserve exact body proportions and figure, same body type as reference photo, do not slim or alter body shape",
+                "prompt": prompt + ", photorealistic, RAW photo, 8K resolution, sharp focus, natural skin texture, professional photography, cinematic lighting, preserve exact body proportions and figure, same body type as reference photo, do not slim or alter body shape",
                 "reference_image_url": image_data_uri,
                 "num_inference_steps": 30,
                 "guidance_scale": 7,
@@ -233,6 +258,53 @@ async def generate_text_only(prompt: str) -> bytes:
     return base64.b64decode(image_base64)
 
 
+async def process_generation(message: types.Message, user_id: int, prompt: str, is_template: bool = False):
+    credits = await get_credits(user_id)
+    if credits <= 0:
+        await message.answer(
+            "💳 У тебя закончились генерации!\n\nПополни баланс командой /buy 😊"
+        )
+        return
+
+    await message.answer(f"⏳ Генерирую открытку... (осталось: {credits})")
+
+    try:
+        if user_id in user_photos:
+            saved_base64 = user_photos[user_id]
+            image_bytes = await generate_with_flux_pulid(saved_base64, prompt)
+            if not is_template:
+                del user_photos[user_id]
+        else:
+            image_bytes = await generate_text_only(prompt)
+
+        await use_credit(user_id)
+        remaining = await get_credits(user_id)
+
+        photo_file = BufferedInputFile(image_bytes, filename="image.png")
+        await message.answer_photo(
+            photo_file,
+            caption=f"✅ Готово! Осталось: *{remaining} генераций*",
+            parse_mode="Markdown"
+        )
+
+    except Exception as e:
+        logger.error(f"[{user_id}] Ошибка: {e}", exc_info=True)
+        err = str(e)
+        if "no face detected" in err.lower() or "face" in err.lower():
+            await message.answer(
+                "⚠️ Не удалось найти лицо на фото.\n\n"
+                "Попробуйте другое фото — реальный портрет с чётким лицом 😊"
+            )
+        elif "content_policy" in err.lower() or "safety" in err.lower():
+            await message.answer("⚠️ Запрос нарушает правила контента. Попробуйте переформулировать.")
+        elif "billing" in err.lower() or "quota" in err.lower():
+            await message.answer("💳 Проблема с балансом. Проверьте аккаунт.")
+        elif "временно недоступен" in err:
+            await message.answer("⚠️ " + err)
+        else:
+            await message.answer(f"❌ Ошибка:\n`{err[:300]}`", parse_mode="Markdown")
+
+
 class PaymentState(StatesGroup):
     waiting_receipt = State()
 
@@ -247,6 +319,7 @@ async def cmd_start(message: types.Message):
         await message.answer(
             f"👋 Привет! Я генерирую изображения с помощью ИИ.\n\n"
             f"🎁 Тебе начислено *{FREE_CREDITS} бесплатные генерации* — попробуй!\n\n"
+            "🌷 *Открытки к 8 марта* — /march8\n\n"
             "🖼 *Без фото* — напиши текст, создам картинку.\n\n"
             "🧑‍🎨 *С твоим фото* — отправь фото + описание, перенесу тебя в новую сцену с сохранением лица.\n\n"
             "⚠️ Для генерации с фото нужно *реальное фото* — рисунки и аниме не поддерживаются.\n\n"
@@ -257,10 +330,28 @@ async def cmd_start(message: types.Message):
     else:
         await message.answer(
             f"👋 Привет! Рада тебя видеть снова!\n\n"
+            f"🌷 Открытки к 8 марта — /march8\n\n"
             f"💳 У тебя: *{credits} генераций*\n\n"
             "💰 Купить генерации — /buy\n"
             "💳 Баланс — /balance",
             parse_mode="Markdown"
+        )
+
+
+@dp.message(Command("march8"))
+async def cmd_march8(message: types.Message):
+    if message.from_user.id not in user_photos:
+        await message.answer(
+            "🌷 *Открытки к 8 марта!*\n\n"
+            "Сначала отправь своё фото — я сохраню его и предложу стили открыток 😊\n\n"
+            "⚠️ Нужно реальное фото с чётким лицом.",
+            parse_mode="Markdown"
+        )
+    else:
+        await message.answer(
+            "🌷 *Выбери стиль открытки к 8 марта:*",
+            parse_mode="Markdown",
+            reply_markup=march8_keyboard()
         )
 
 
@@ -315,6 +406,27 @@ async def process_paid(callback: types.CallbackQuery, state: FSMContext):
     await state.update_data(tariff_key=tariff_key)
     await callback.message.answer("📸 Отправь скриншот чека!")
     await callback.answer()
+
+
+@dp.callback_query(lambda c: c.data.startswith("m8_"))
+async def process_march8_template(callback: types.CallbackQuery):
+    user_id = callback.from_user.id
+    template_key = callback.data[3:]
+    template = MARCH8_TEMPLATES.get(template_key)
+
+    if not template:
+        await callback.answer("Ошибка")
+        return
+
+    if user_id not in user_photos:
+        await callback.message.answer(
+            "⚠️ Сначала отправь своё фото! Без фото не могу создать открытку с твоим лицом 😊"
+        )
+        await callback.answer()
+        return
+
+    await callback.answer()
+    await process_generation(callback.message, user_id, template["prompt"], is_template=True)
 
 
 @dp.message(PaymentState.waiting_receipt)
@@ -383,12 +495,16 @@ async def handle_message(message: types.Message):
             image_bytes = downloaded.read()
             image_base64 = compress_image(image_bytes)
             user_photos[user_id] = image_base64
-            await message.answer(
-                "📸 Фото сохранено!\n\nНапишите описание — как изменить образ.\n"
-                "Можно на *русском* или *английском* 😊\n\n"
-                "⚠️ *Важно:* подходят только реальные фото людей — рисунки и аниме не поддерживаются.",
-                parse_mode="Markdown"
-            )
+
+            if True:
+                await message.answer(
+                    "📸 Фото сохранено!\n\n"
+                    "🌷 Хочешь открытку к *8 марта*? Нажми /march8\n\n"
+                    "Или напишите описание — как изменить образ.\n"
+                    "Можно на *русском* или *английском* 😊\n\n"
+                    "⚠️ *Важно:* подходят только реальные фото людей — рисунки и аниме не поддерживаются.",
+                    parse_mode="Markdown"
+                )
         except Exception as e:
             logger.error(f"Ошибка фото: {e}")
             await message.answer("❌ Не удалось обработать фото.")
@@ -396,51 +512,10 @@ async def handle_message(message: types.Message):
 
     if message.text:
         prompt = message.text.strip()
-        credits = await get_credits(user_id)
-
-        if credits <= 0:
-            await message.answer(
-                "💳 У тебя закончились генерации!\n\n"
-                "Пополни баланс командой /buy 😊"
-            )
+        if prompt.startswith("/"):
             return
 
-        await message.answer(f"⏳ Генерирую... (осталось: {credits})")
-
-        try:
-            if user_id in user_photos:
-                saved_base64 = user_photos[user_id]
-                image_bytes = await generate_with_flux_pulid(saved_base64, prompt)
-                del user_photos[user_id]
-            else:
-                image_bytes = await generate_text_only(prompt)
-
-            await use_credit(user_id)
-            remaining = await get_credits(user_id)
-
-            photo_file = BufferedInputFile(image_bytes, filename="image.png")
-            await message.answer_photo(
-                photo_file,
-                caption=f"✅ Готово! Осталось: *{remaining} генераций*",
-                parse_mode="Markdown"
-            )
-
-        except Exception as e:
-            logger.error(f"[{user_id}] Ошибка: {e}", exc_info=True)
-            err = str(e)
-            if "no face detected" in err.lower() or "face" in err.lower():
-                await message.answer(
-                    "⚠️ Не удалось найти лицо на фото.\n\n"
-                    "Попробуйте другое фото — реальный портрет с чётким лицом 😊"
-                )
-            elif "content_policy" in err.lower() or "safety" in err.lower():
-                await message.answer("⚠️ Запрос нарушает правила контента. Попробуйте переформулировать.")
-            elif "billing" in err.lower() or "quota" in err.lower():
-                await message.answer("💳 Проблема с балансом. Проверьте аккаунт.")
-            elif "временно недоступен" in err:
-                await message.answer("⚠️ " + err)
-            else:
-                await message.answer(f"❌ Ошибка:\n`{err[:300]}`", parse_mode="Markdown")
+        await process_generation(message, user_id, translate_prompt(prompt))
 
 
 async def main():
