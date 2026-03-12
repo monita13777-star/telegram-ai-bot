@@ -14,10 +14,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 from openai import OpenAI
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s"
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -69,6 +66,7 @@ dp = Dispatcher(storage=storage)
 client = OpenAI(api_key=OPENAI_API_KEY)
 
 user_photos: dict[int, str] = {}
+user_model: dict[int, str] = {}  # хранит выбранную модель: "flux" или "banana"
 db_pool = None
 
 
@@ -89,19 +87,14 @@ async def init_db():
 async def get_credits(user_id: int) -> int:
     async with db_pool.acquire() as conn:
         row = await conn.fetchrow("SELECT credits FROM users WHERE user_id = $1", user_id)
-        if row is None:
-            return -1
-        return row["credits"]
+        return -1 if row is None else row["credits"]
 
 
 async def init_user(user_id: int) -> bool:
     async with db_pool.acquire() as conn:
         existing = await conn.fetchrow("SELECT user_id FROM users WHERE user_id = $1", user_id)
         if existing is None:
-            await conn.execute(
-                "INSERT INTO users (user_id, credits) VALUES ($1, $2)",
-                user_id, FREE_CREDITS
-            )
+            await conn.execute("INSERT INTO users (user_id, credits) VALUES ($1, $2)", user_id, FREE_CREDITS)
             return True
         return False
 
@@ -117,8 +110,7 @@ async def add_credits(user_id: int, count: int):
 async def use_credit(user_id: int) -> bool:
     async with db_pool.acquire() as conn:
         result = await conn.execute("""
-            UPDATE users SET credits = credits - 1
-            WHERE user_id = $1 AND credits > 0
+            UPDATE users SET credits = credits - 1 WHERE user_id = $1 AND credits > 0
         """, user_id)
         return result == "UPDATE 1"
 
@@ -135,21 +127,9 @@ def compress_image(image_bytes: bytes, max_size: int = 1024) -> str:
 
 def detect_image_size(prompt: str) -> tuple[str, str]:
     prompt_lower = prompt.lower()
-    vertical_keywords = [
-        "full body", "full-body", "standing", "walking", "в полный рост",
-        "стоит", "идёт", "идет", "whole body", "весь рост"
-    ]
-    landscape_keywords = [
-        "landscape", "panorama", "wide", "city", "street", "nature", "ocean",
-        "пейзаж", "панорама", "широкий", "горизонтальный", "город", "улица",
-        "природа", "океан", "море", "beach", "пляж", "forest", "лес",
-        "mountain", "гора", "sky", "небо"
-    ]
-    portrait_keywords = [
-        "portrait", "close-up", "closeup", "face", "headshot", "selfie",
-        "портрет", "крупный план", "лицо", "вертикальный",
-        "profile", "профиль"
-    ]
+    vertical_keywords = ["full body", "full-body", "standing", "walking", "в полный рост", "стоит", "идёт", "идет", "whole body", "весь рост"]
+    landscape_keywords = ["landscape", "panorama", "wide", "city", "street", "nature", "ocean", "пейзаж", "панорама", "широкий", "горизонтальный", "город", "улица", "природа", "океан", "море", "beach", "пляж", "forest", "лес", "mountain", "гора", "sky", "небо"]
+    portrait_keywords = ["portrait", "close-up", "closeup", "face", "headshot", "selfie", "портрет", "крупный план", "лицо", "вертикальный", "profile", "профиль"]
     for kw in vertical_keywords:
         if kw in prompt_lower:
             return "portrait_16_9", "1024x1536"
@@ -162,23 +142,24 @@ def detect_image_size(prompt: str) -> tuple[str, str]:
     return "square_hd", "1024x1024"
 
 
+def model_choice_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="⚡ Flux PuLID — чёткое лицо", callback_data="model_flux")],
+        [InlineKeyboardButton(text="🍌 Nano Banana — реалистичнее", callback_data="model_banana")],
+    ])
+
+
 def tariff_keyboard() -> InlineKeyboardMarkup:
     buttons = []
     for key, t in TARIFFS.items():
-        buttons.append([InlineKeyboardButton(
-            text=f"{t['name']} — {t['price']}₽",
-            callback_data=f"buy_{key}"
-        )])
+        buttons.append([InlineKeyboardButton(text=f"{t['name']} — {t['price']}₽", callback_data=f"buy_{key}")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
 def styles_keyboard() -> InlineKeyboardMarkup:
     buttons = []
     for key, t in STYLE_TEMPLATES.items():
-        buttons.append([InlineKeyboardButton(
-            text=t["name"],
-            callback_data=f"style_{key}"
-        )])
+        buttons.append([InlineKeyboardButton(text=t["name"], callback_data=f"style_{key}")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
@@ -187,21 +168,10 @@ def translate_prompt(user_prompt: str) -> str:
         response = client.chat.completions.create(
             model="gpt-4o",
             messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "You are a professional image prompt translator. "
-                        "If the prompt is in Russian, translate it to English. "
-                        "If it is already in English, return it as-is without changes. "
-                        "Do NOT summarize, shorten, or lose any details. "
-                        "Preserve ALL objects, accessories, clothing, atmosphere, and scene details exactly. "
-                        "Return ONLY the translated prompt, nothing else."
-                    )
-                },
+                {"role": "system", "content": "You are a professional image prompt translator. If the prompt is in Russian, translate it to English. If it is already in English, return it as-is. Do NOT summarize or shorten. Return ONLY the translated prompt."},
                 {"role": "user", "content": user_prompt}
             ],
-            max_tokens=800,
-            temperature=0.3
+            max_tokens=800, temperature=0.3
         )
         translated = response.choices[0].message.content.strip()
         logger.info(f"Промпт переведён: '{user_prompt[:50]}...' -> '{translated[:50]}...'")
@@ -211,17 +181,36 @@ def translate_prompt(user_prompt: str) -> str:
         return user_prompt
 
 
-async def generate_with_flux_pulid(image_base64: str, prompt: str) -> bytes:
-    fal_size, _ = detect_image_size(prompt)
-    image_data_uri = f"data:image/jpeg;base64,{image_base64}"
-
-    async with httpx.AsyncClient(timeout=180) as http:
-        gen_response = await http.post(
-            "https://fal.run/fal-ai/flux-pulid",
+async def upload_to_fal(image_base64: str) -> str:
+    """Загружает base64 фото на fal.ai storage и возвращает публичный URL"""
+    image_bytes = base64.b64decode(image_base64)
+    async with httpx.AsyncClient(timeout=60) as http:
+        response = await http.post(
+            "https://rest.alpha.fal.ai/storage/upload/base64",
             headers={
                 "Authorization": f"Key {FAL_API_KEY}",
                 "Content-Type": "application/json"
             },
+            json={
+                "file_name": "photo.jpg",
+                "content_type": "image/jpeg",
+                "data": image_base64
+            }
+        )
+        if response.status_code != 200:
+            # Fallback: используем data URI напрямую
+            return f"data:image/jpeg;base64,{image_base64}"
+        result = response.json()
+        return result.get("url", f"data:image/jpeg;base64,{image_base64}")
+
+
+async def generate_with_flux_pulid(image_base64: str, prompt: str) -> bytes:
+    fal_size, _ = detect_image_size(prompt)
+    image_data_uri = f"data:image/jpeg;base64,{image_base64}"
+    async with httpx.AsyncClient(timeout=180) as http:
+        gen_response = await http.post(
+            "https://fal.run/fal-ai/flux-pulid",
+            headers={"Authorization": f"Key {FAL_API_KEY}", "Content-Type": "application/json"},
             json={
                 "prompt": prompt + ", photorealistic, RAW photo, 8K resolution, sharp focus, natural skin texture, professional photography, cinematic lighting, preserve exact body proportions and figure, same body type as reference photo, do not slim or alter body shape",
                 "reference_image_url": image_data_uri,
@@ -233,20 +222,44 @@ async def generate_with_flux_pulid(image_base64: str, prompt: str) -> bytes:
                 "num_images": 1,
             }
         )
-
-        logger.info(f"fal.ai статус: {gen_response.status_code}")
-
+        logger.info(f"Flux PuLID статус: {gen_response.status_code}")
         if gen_response.status_code == 500:
             raise ValueError("Сервер fal.ai временно недоступен. Попробуйте ещё раз через минуту.")
-
         try:
             gen_data = gen_response.json()
         except Exception:
             raise ValueError(f"Неожиданный ответ fal.ai: {gen_response.text[:200]}")
-
         if "images" not in gen_data:
             raise ValueError(f"Ошибка fal.ai: {gen_data}")
+        result_url = gen_data["images"][0]["url"]
+        img_response = await http.get(result_url)
+        return img_response.content
 
+
+async def generate_with_nano_banana(image_base64: str, prompt: str) -> bytes:
+    image_url = await upload_to_fal(image_base64)
+    async with httpx.AsyncClient(timeout=180) as http:
+        gen_response = await http.post(
+            "https://fal.run/fal-ai/nano-banana/edit",
+            headers={"Authorization": f"Key {FAL_API_KEY}", "Content-Type": "application/json"},
+            json={
+                "prompt": prompt + ". Keep the exact face, age, and appearance of the person from the reference photo. Photorealistic, high quality.",
+                "image_urls": [image_url],
+                "num_images": 1,
+                "aspect_ratio": "auto",
+                "output_format": "png",
+                "safety_tolerance": "4",
+            }
+        )
+        logger.info(f"Nano Banana статус: {gen_response.status_code}")
+        if gen_response.status_code == 500:
+            raise ValueError("Сервер Nano Banana временно недоступен. Попробуйте ещё раз через минуту.")
+        try:
+            gen_data = gen_response.json()
+        except Exception:
+            raise ValueError(f"Неожиданный ответ Nano Banana: {gen_response.text[:200]}")
+        if "images" not in gen_data:
+            raise ValueError(f"Ошибка Nano Banana: {gen_data}")
         result_url = gen_data["images"][0]["url"]
         img_response = await http.get(result_url)
         return img_response.content
@@ -255,31 +268,32 @@ async def generate_with_flux_pulid(image_base64: str, prompt: str) -> bytes:
 async def generate_text_only(prompt: str) -> bytes:
     translated_prompt = translate_prompt(prompt)
     _, openai_size = detect_image_size(prompt + " " + translated_prompt)
-
     result = client.images.generate(
         model="gpt-image-1",
         prompt=translated_prompt,
         size=openai_size,
         quality="high",
     )
-    image_base64 = result.data[0].b64_json
-    return base64.b64decode(image_base64)
+    return base64.b64decode(result.data[0].b64_json)
 
 
 async def process_generation(message: types.Message, user_id: int, prompt: str, is_template: bool = False):
     credits = await get_credits(user_id)
     if credits <= 0:
-        await message.answer(
-            "💳 У тебя закончились генерации!\n\nПополни баланс командой /buy 😊"
-        )
+        await message.answer("💳 У тебя закончились генерации!\n\nПополни баланс командой /buy 😊")
         return
 
-    await message.answer(f"⏳ Генерирую... подожди немного (осталось: {credits})")
+    model = user_model.get(user_id, "flux")
+    model_name = "🍌 Nano Banana" if model == "banana" else "⚡ Flux PuLID"
+    await message.answer(f"⏳ Генерирую [{model_name}]... подожди немного (осталось: {credits})")
 
     try:
         if user_id in user_photos:
             saved_base64 = user_photos[user_id]
-            image_bytes = await generate_with_flux_pulid(saved_base64, prompt)
+            if model == "banana":
+                image_bytes = await generate_with_nano_banana(saved_base64, prompt)
+            else:
+                image_bytes = await generate_with_flux_pulid(saved_base64, prompt)
             if not is_template:
                 del user_photos[user_id]
         else:
@@ -299,10 +313,7 @@ async def process_generation(message: types.Message, user_id: int, prompt: str, 
         logger.error(f"[{user_id}] Ошибка: {e}", exc_info=True)
         err = str(e)
         if "no face detected" in err.lower() or "face" in err.lower():
-            await message.answer(
-                "⚠️ Не удалось найти лицо на фото.\n\n"
-                "Попробуйте другое фото — реальный портрет с чётким лицом 😊"
-            )
+            await message.answer("⚠️ Не удалось найти лицо на фото.\n\nПопробуйте другое фото — реальный портрет с чётким лицом 😊")
         elif "content_policy" in err.lower() or "safety" in err.lower():
             await message.answer("⚠️ Запрос нарушает правила контента. Попробуйте переформулировать.")
         elif "billing" in err.lower() or "quota" in err.lower():
@@ -322,7 +333,6 @@ async def cmd_start(message: types.Message):
     user_id = message.from_user.id
     is_new = await init_user(user_id)
     credits = await get_credits(user_id)
-
     if is_new:
         await message.answer(
             f"👋 Привет! Я генерирую изображения с помощью ИИ.\n\n"
@@ -358,19 +368,12 @@ async def cmd_styles(message: types.Message):
             parse_mode="Markdown"
         )
     else:
-        await message.answer(
-            "✨ *Выбери образ:*",
-            parse_mode="Markdown",
-            reply_markup=styles_keyboard()
-        )
+        await message.answer("✨ *Выбери образ:*", parse_mode="Markdown", reply_markup=styles_keyboard())
 
 
 @dp.message(Command("buy"))
 async def cmd_buy(message: types.Message):
-    await message.answer(
-        "💳 Выбери пакет генераций:",
-        reply_markup=tariff_keyboard()
-    )
+    await message.answer("💳 Выбери пакет генераций:", reply_markup=tariff_keyboard())
 
 
 @dp.message(Command("balance"))
@@ -383,17 +386,32 @@ async def cmd_balance(message: types.Message):
 @dp.message(Command("reset"))
 async def cmd_reset(message: types.Message):
     user_photos.pop(message.from_user.id, None)
+    user_model.pop(message.from_user.id, None)
     await message.answer("🔄 Фото сброшено.")
 
 
+@dp.callback_query(lambda c: c.data.startswith("model_"))
+async def process_model_choice(callback: types.CallbackQuery):
+    user_id = callback.from_user.id
+    model = callback.data.split("_")[1]
+    user_model[user_id] = model
+    model_name = "🍌 Nano Banana" if model == "banana" else "⚡ Flux PuLID"
+    await callback.message.edit_text(
+        f"✅ Выбрана модель: *{model_name}*\n\n"
+        "✨ Теперь выбери образ — /styles\n"
+        "Или напиши своё описание 😊",
+        parse_mode="Markdown"
+    )
+    await callback.answer()
+
+
 @dp.callback_query(lambda c: c.data.startswith("buy_"))
-async def process_buy(callback: types.CallbackQuery, state: FSMContext):
+async def process_buy(callback: types.CallbackQuery):
     tariff_key = callback.data.split("_")[1]
     tariff = TARIFFS.get(tariff_key)
     if not tariff:
         await callback.answer("Ошибка")
         return
-
     await callback.message.answer(
         f"💳 *{tariff['name']} — {tariff['price']}₽*\n\n"
         f"Переведи *{tariff['price']}₽* на Сбер:\n"
@@ -421,21 +439,15 @@ async def process_paid(callback: types.CallbackQuery, state: FSMContext):
 @dp.callback_query(lambda c: c.data.startswith("style_"))
 async def process_style_template(callback: types.CallbackQuery):
     user_id = callback.from_user.id
-    # убираем двойной префикс style_style_
     template_key = callback.data[6:]
     template = STYLE_TEMPLATES.get(template_key)
-
     if not template:
         await callback.answer("Ошибка")
         return
-
     if user_id not in user_photos:
-        await callback.message.answer(
-            "⚠️ Сначала отправь своё фото! Без фото не могу создать образ с твоим лицом 😊"
-        )
+        await callback.message.answer("⚠️ Сначала отправь своё фото! Без фото не могу создать образ с твоим лицом 😊")
         await callback.answer()
         return
-
     await callback.answer()
     await process_generation(callback.message, user_id, template["prompt"], is_template=True)
 
@@ -446,12 +458,8 @@ async def process_receipt(message: types.Message, state: FSMContext):
     tariff_key = data.get("tariff_key")
     tariff = TARIFFS.get(tariff_key)
     user_id = message.from_user.id
-
     if message.photo:
-        await message.answer(
-            "⏳ Чек получен! Проверяем оплату — обычно до 15 минут.\n"
-            "Уведомим тебя как только начислим генерации!"
-        )
+        await message.answer("⏳ Чек получен! Проверяем оплату — обычно до 15 минут.\nУведомим тебя как только начислим генерации!")
         try:
             await bot.send_photo(
                 chat_id=ADMIN_ID,
@@ -483,9 +491,7 @@ async def cmd_add_credits(message: types.Message):
         await message.answer(f"✅ Начислено {count} генераций пользователю {target_id}")
         await bot.send_message(
             target_id,
-            f"✅ Оплата подтверждена!\n"
-            f"Начислено *{count} генераций*.\n"
-            f"Теперь у тебя: *{credits} генераций* 🎨",
+            f"✅ Оплата подтверждена!\nНачислено *{count} генераций*.\nТеперь у тебя: *{credits} генераций* 🎨",
             parse_mode="Markdown"
         )
     except Exception as e:
@@ -504,21 +510,19 @@ async def handle_message(message: types.Message):
             file = await bot.get_file(photo.file_id)
             downloaded = await bot.download_file(file.file_path)
             image_bytes = downloaded.read()
-
-            # Проверка на групповое фото — предупреждение
-            img = Image.open(BytesIO(image_bytes))
             image_base64 = compress_image(image_bytes)
             user_photos[user_id] = image_base64
 
             await message.answer(
                 "📸 Фото сохранено!\n\n"
-                "✨ Хочешь примерить готовый образ? Нажми /styles\n\n"
-                "Или напиши своё описание — как изменить образ.\n"
-                "Можно на *русском* или *английском* 😊\n\n"
+                "Выбери модель генерации:\n\n"
+                "⚡ *Flux PuLID* — точнее сохраняет черты лица\n"
+                "🍌 *Nano Banana* — более реалистичный результат\n\n"
                 "⚠️ *Важно:*\n"
-                "• Подходят только реальные фото людей — рисунки и аниме не поддерживаются\n"
-                "• На фото должен быть *один человек* — с групповыми фото бот не работает",
-                parse_mode="Markdown"
+                "• Только реальные фото людей — рисунки и аниме не поддерживаются\n"
+                "• На фото должен быть *один человек*",
+                parse_mode="Markdown",
+                reply_markup=model_choice_keyboard()
             )
         except Exception as e:
             logger.error(f"Ошибка фото: {e}")
@@ -529,7 +533,6 @@ async def handle_message(message: types.Message):
         prompt = message.text.strip()
         if prompt.startswith("/"):
             return
-
         await process_generation(message, user_id, translate_prompt(prompt))
 
 
