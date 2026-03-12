@@ -33,39 +33,13 @@ TARIFFS = {
 
 FREE_CREDITS = 3
 
-STYLE_CATEGORIES = {
-    "women": "👩 Женские образы",
-    "men": "👨 Мужские образы",
-    "boys": "👦 Для мальчиков",
-    "girls": "👧 Для девочек",
-}
-
 STYLE_TEMPLATES = {
-    # ЖЕНСКИЕ
-    "women_party": {"cat": "women", "name": "💃 Красная дорожка", "prompt": "The person from my photo without changing facial features, hair color or eye color. A glamorous woman walking the red carpet at a luxurious Hollywood premiere. Wearing a stunning floor-length sequined evening gown, professional hair and makeup. Paparazzi flashes in the background, velvet rope barriers, elegant guests. Shot on Canon EOS R5, 85mm f/1.4, dramatic lighting, magazine quality, 8K."},
-    "women_beach": {"cat": "women", "name": "🌴 Лето / пляж", "prompt": "The person from my photo without changing facial features, hair color or eye color. A woman relaxing on a beautiful tropical beach with crystal clear turquoise water. Wearing a stylish summer dress, hair flowing in the breeze. White sand beach, palm trees, golden sunshine, distant sailboats on the horizon. Shot on Sony A7R IV, 50mm f/1.8, golden hour lighting, vacation mood, 8K."},
-    "women_queen": {"cat": "women", "name": "👑 Королева / роскошь", "prompt": "The person from my photo without changing facial features, hair color or eye color. A regal woman portrayed as a queen in an opulent palace interior. Hair styled in an elegant royal updo with soft curls and braids, decorated with pearls and golden pins. Wearing an elaborate royal gown with jeweled crown placed on the updo, pearl necklace and diamond earrings. Ornate golden throne, velvet drapes, candlelit chandeliers, marble floors. Shot on Hasselblad H6D, dramatic royal lighting, Renaissance painting style, 8K."},
-    "women_business": {"cat": "women", "name": "💼 Деловая женщина", "prompt": "The person from my photo without changing facial features, hair color or eye color. A confident successful businesswoman in a modern glass office skyscraper. Wearing an elegant tailored suit, standing by floor-to-ceiling windows with city skyline view. Professional posture, slight smile, holding a tablet. Shot on Canon EOS R5, 35mm f/2.0, clean corporate lighting, Forbes magazine style, 8K."},
-    "women_picnic": {"cat": "women", "name": "🧺 Майский пикник", "prompt": "The person from my photo without changing facial features, hair color or eye color. A woman sitting on a cozy plaid blanket on fresh green spring grass in May. Next to her is a wicker picnic basket filled with food and drinks, bottles of lemonade. In the background her red convertible car is parked with the top down. On the blanket lie badminton rackets, a frisbee and a ball. Warm spring sunlight, young bright green leaves on trees, wildflowers. Shot on Sony A7R IV, 50mm f/1.4, natural daylight, lifestyle photography, 8K."},
-    "women_hammock": {"cat": "women", "name": "🍎 Гамак / дача", "prompt": "The person from my photo without changing facial features, hair color or eye color. A woman lying in a cozy fabric hammock strung between two blooming apple trees in a Russian dacha garden. Apple blossoms falling gently around her, green grass below, a wooden dacha house visible in the background. She looks relaxed and happy, holding a book and a cup of tea. Soft warm afternoon light filtering through the apple tree leaves. Shot on Canon EOS R5, 85mm f/1.4, soft natural bokeh, cozy summer dacha atmosphere, 8K."},
-
-    # МУЖСКИЕ
-    "men_business": {"cat": "men", "name": "🕴️ Деловой / бизнес", "prompt": "The person from my photo without changing facial features, hair color or eye color. A confident successful businessman in a modern glass office skyscraper. Wearing an elegant tailored suit and tie, standing by floor-to-ceiling windows with city skyline view. Strong professional posture, slight confident smile. Shot on Canon EOS R5, 35mm f/2.0, clean corporate lighting, Forbes magazine style, 8K."},
-    "men_warrior": {"cat": "men", "name": "⚔️ Воин / викинг", "prompt": "The person from my photo without changing facial features, hair color or eye color. A powerful warrior Viking standing on a dramatic rocky cliff overlooking a stormy Norse sea. Wearing authentic Viking armor with fur cloak, holding a battle axe. Long hair and beard blowing in the wind. Epic dramatic lighting, storm clouds, northern lights faintly visible. Shot on Hasselblad H6D, cinematic epic lighting, 8K."},
-    "men_biker": {"cat": "men", "name": "🏍️ Байкер / брутал", "prompt": "The person from my photo without changing facial features, hair color or eye color. A rugged tough biker man standing next to a powerful custom chopper motorcycle on an empty desert highway at sunset. Wearing a black leather jacket with patches, jeans, and boots. Arms crossed, confident pose. Shot on Canon EOS R5, 50mm f/1.4, dramatic golden hour lighting, cinematic style, 8K."},
-    "men_traveler": {"cat": "men", "name": "🌊 Путешественник / природа", "prompt": "The person from my photo without changing facial features, hair color or eye color. An adventurous man standing on top of a dramatic mountain peak overlooking a vast wilderness landscape at sunrise. Wearing professional hiking gear with a backpack. Arms spread wide, triumphant pose. Epic mountain panorama, golden morning light, clouds below. Shot on Sony A7R IV, 24mm f/2.8, dramatic landscape photography, 8K."},
-
-    # МАЛЬЧИКИ
-    "boys_superhero": {"cat": "boys", "name": "🦸 Супергерой", "prompt": "The child from my photo without changing facial features or hair color. A young boy as a superhero in a dynamic comic book style scene. Wearing a custom superhero costume with a cape flowing in the wind. Standing heroically on a rooftop against a dramatic city skyline at night with lightning in the background. Glowing energy in his hands. Highly detailed, cinematic comic book art style, vibrant colors, 8K."},
-    "boys_elf": {"cat": "boys", "name": "🧝 Сказочный эльф", "prompt": "The child from my photo without changing facial features or hair color. A young boy as a magical forest elf in an enchanted woodland. Wearing elegant elven clothing with a bow and quiver of arrows. Surrounded by magical glowing fireflies, ancient mystical trees, soft ethereal light filtering through leaves. Fantasy art style, magical atmosphere, vibrant colors, 8K."},
-    "boys_nature": {"cat": "boys", "name": "🐾 Приключения / природа", "prompt": "The child from my photo without changing facial features or hair color. A young boy on an exciting jungle adventure, standing on a rope bridge over a lush tropical canyon. Wearing explorer clothes with a safari hat and backpack. Exotic birds flying around, waterfall visible in the background, golden afternoon light. Shot on Canon EOS R5, 35mm f/2.0, adventure photography style, vibrant colors, 8K."},
-    "boys_farmer": {"cat": "boys", "name": "🚜 Маленький фермер", "prompt": "The child from my photo without changing facial features or hair color. An adorable young boy dressed as a little farmer wearing a stylish denim overalls and a cute straw farmer hat. He is gently holding a fluffy white baby bunny in his arms with a big happy smile. In the soft-focus background there are beautiful horses grazing behind a wooden fence in a sunny green meadow. Shot on Canon EOS R5 with 85mm f/1.4 lens, warm golden hour sunlight, shallow depth of field, professional lifestyle photography, magazine quality, 8K."},
-
-    # ДЕВОЧКИ
-    "girls_princess": {"cat": "girls", "name": "👸 Принцесса / сказка", "prompt": "The child from my photo without changing facial features or hair color. A beautiful young girl as a fairy tale princess in a magical enchanted castle. Wearing an elaborate sparkling ball gown with a delicate tiara. Surrounded by magical butterflies, roses, and soft golden light streaming through tall castle windows. Disney princess art style, dreamy magical atmosphere, pastel colors, 8K."},
-    "girls_fairy": {"cat": "girls", "name": "🧚 Фея / волшебница", "prompt": "The child from my photo without changing facial features or hair color. A magical young girl as a beautiful fairy with delicate shimmering wings in an enchanted flower garden. Wearing a gorgeous fairy dress made of flower petals, holding a magic wand with sparkling stars. Surrounded by giant colorful flowers, glowing fireflies, magical sparkles. Fantasy art style, soft pastel colors, magical dreamy atmosphere, 8K."},
-    "girls_strangerthings": {"cat": "girls", "name": "👾 Очень странные дела", "prompt": "The child from my photo without changing facial features or hair color. A young girl in the style of Stranger Things TV show. She is standing in a dark mysterious forest at night with fog on the ground and string lights hanging between trees. A terrifying Demogorgon creature looms in the dark background. She wears 80s style clothing and looks brave and determined. Cinematic dramatic lighting, dark atmospheric style, 8K."},
-    "girls_flowers": {"cat": "girls", "name": "🌸 С полевыми цветами", "prompt": "The child from my photo without changing facial features or hair color. A sweet young girl standing in a beautiful sunlit meadow holding a large bouquet of colorful wildflowers — daisies, cornflowers, poppies, and buttercups. Wearing a light floral summer dress, hair with a small flower crown. Soft golden afternoon light, blurred green meadow background with wildflowers, butterflies flying around. Shot on Canon EOS R5, 85mm f/1.4, warm natural light, lifestyle photography, 8K."},
+    "style_party": {"name": "💃 Красная дорожка", "prompt": "The person from my photo without changing facial features, hair color or eye color. A glamorous woman walking the red carpet at a luxurious Hollywood premiere. Wearing a stunning floor-length sequined evening gown, professional hair and makeup. Paparazzi flashes in the background, velvet rope barriers, elegant guests. Shot on Canon EOS R5, 85mm f/1.4, dramatic lighting, magazine quality, 8K."},
+    "style_beach": {"name": "🌴 Лето / пляж", "prompt": "The person from my photo without changing facial features, hair color or eye color. A woman relaxing on a beautiful tropical beach with crystal clear turquoise water. Wearing a stylish summer dress, hair flowing in the breeze. White sand beach, palm trees, golden sunshine, distant sailboats on the horizon. Shot on Sony A7R IV, 50mm f/1.8, golden hour lighting, vacation mood, 8K."},
+    "style_queen": {"name": "👑 Королева / роскошь", "prompt": "The person from my photo without changing facial features, hair color or eye color. A regal woman portrayed as a queen in an opulent palace interior. Hair styled in an elegant royal updo with soft curls and braids, decorated with pearls and golden pins. Wearing an elaborate royal gown with jeweled crown placed on the updo, pearl necklace and diamond earrings. Ornate golden throne, velvet drapes, candlelit chandeliers, marble floors. Shot on Hasselblad H6D, dramatic royal lighting, Renaissance painting style, 8K."},
+    "style_business": {"name": "💼 Деловая женщина", "prompt": "The person from my photo without changing facial features, hair color or eye color. A confident successful businesswoman in a modern glass office skyscraper. Wearing an elegant tailored suit, standing by floor-to-ceiling windows with city skyline view. Professional posture, slight smile, holding a tablet. Shot on Canon EOS R5, 35mm f/2.0, clean corporate lighting, Forbes magazine style, 8K."},
+    "style_picnic": {"name": "🧺 Майский пикник", "prompt": "The person from my photo without changing facial features, hair color or eye color. A woman sitting on a cozy plaid blanket on fresh green spring grass in May. Next to her is a wicker picnic basket filled with food and drinks, bottles of lemonade. In the background her red convertible car is parked with the top down. On the blanket lie badminton rackets, a frisbee and a ball. Warm spring sunlight, young bright green leaves on trees, wildflowers. Shot on Sony A7R IV, 50mm f/1.4, natural daylight, lifestyle photography, 8K."},
+    "style_hammock": {"name": "🍎 Гамак / дача", "prompt": "The person from my photo without changing facial features, hair color or eye color. A woman lying in a cozy fabric hammock strung between two blooming apple trees in a Russian dacha garden. Apple blossoms falling gently around her, green grass below, a wooden dacha house visible in the background. She looks relaxed and happy, holding a book and a cup of tea. Soft warm afternoon light filtering through the apple tree leaves. Shot on Canon EOS R5, 85mm f/1.4, soft natural bokeh, cozy summer dacha atmosphere, 8K."},
 }
 
 bot = Bot(token=BOT_TOKEN)
@@ -157,19 +131,10 @@ def model_choice_keyboard() -> InlineKeyboardMarkup:
     ])
 
 
-def categories_keyboard() -> InlineKeyboardMarkup:
-    buttons = []
-    for key, name in STYLE_CATEGORIES.items():
-        buttons.append([InlineKeyboardButton(text=name, callback_data=f"cat_{key}")])
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
-
-
-def styles_keyboard(category: str) -> InlineKeyboardMarkup:
+def styles_keyboard() -> InlineKeyboardMarkup:
     buttons = []
     for key, t in STYLE_TEMPLATES.items():
-        if t["cat"] == category:
-            buttons.append([InlineKeyboardButton(text=t["name"], callback_data=f"style_{key}")])
-    buttons.append([InlineKeyboardButton(text="⬅️ Назад к категориям", callback_data="back_to_cats")])
+        buttons.append([InlineKeyboardButton(text=t["name"], callback_data=f"style_{key}")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
@@ -343,13 +308,12 @@ async def cmd_start(message: types.Message):
     if is_new:
         await message.answer(
             f"👋 Привет! Я генерирую изображения с помощью ИИ.\n\n"
-            f"🎁 Тебе начислено *{FREE_CREDITS} бесплатные генерации* — попробуй!\n\n"
-            "✨ *Готовые образы* — /styles\n"
-            "👩 Женские • 👨 Мужские • 👦 Мальчики • 👧 Девочки\n\n"
+            f"🎁 Тебе начислено *{FREE_CREDITS} бесплатных генерации* — попробуй!\n\n"
+            "✨ *Готовые образы* — /styles\n\n"
             "🖼 *Без фото* — напиши текст, создам картинку.\n\n"
-            "🧑‍🎨 *С твоим фото* — отправь фото + описание.\n\n"
+            "🧑‍🎨 *С твоим фото* — отправь фото + описание, перенесу тебя в новую сцену с сохранением лица.\n\n"
             "⚠️ Для генерации с фото:\n"
-            "• Только реальные фото людей\n"
+            "• Только реальные фото людей — рисунки и аниме не поддерживаются\n"
             "• На фото должен быть *один человек*\n\n"
             "💰 Купить генерации — /buy\n"
             "💳 Баланс — /balance",
@@ -376,9 +340,9 @@ async def cmd_styles(message: types.Message):
         )
     else:
         await message.answer(
-            "✨ *Выбери категорию:*",
+            "✨ *Выбери образ:*",
             parse_mode="Markdown",
-            reply_markup=categories_keyboard()
+            reply_markup=styles_keyboard()
         )
 
 
@@ -412,28 +376,6 @@ async def process_model_choice(callback: types.CallbackQuery):
         "✨ Теперь выбери образ — /styles\n"
         "Или напиши своё описание 😊",
         parse_mode="Markdown"
-    )
-    await callback.answer()
-
-
-@dp.callback_query(lambda c: c.data.startswith("cat_"))
-async def process_category(callback: types.CallbackQuery):
-    cat = callback.data[4:]
-    cat_name = STYLE_CATEGORIES.get(cat, "Образы")
-    await callback.message.edit_text(
-        f"✨ *{cat_name}* — выбери образ:",
-        parse_mode="Markdown",
-        reply_markup=styles_keyboard(cat)
-    )
-    await callback.answer()
-
-
-@dp.callback_query(lambda c: c.data == "back_to_cats")
-async def back_to_categories(callback: types.CallbackQuery):
-    await callback.message.edit_text(
-        "✨ *Выбери категорию:*",
-        parse_mode="Markdown",
-        reply_markup=categories_keyboard()
     )
     await callback.answer()
 
@@ -552,7 +494,7 @@ async def handle_message(message: types.Message):
                 "⚡ *Flux PuLID* — точнее сохраняет черты лица\n"
                 "🍌 *Nano Banana* — более реалистичный результат\n\n"
                 "⚠️ *Важно:*\n"
-                "• Только реальные фото людей\n"
+                "• Только реальные фото людей — рисунки и аниме не поддерживаются\n"
                 "• На фото должен быть *один человек*",
                 parse_mode="Markdown",
                 reply_markup=model_choice_keyboard()
