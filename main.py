@@ -36,22 +36,30 @@ TARIFFS = {
 
 FREE_CREDITS = 3
 
-MARCH8_TEMPLATES = {
-    "m8_tulips": {
-        "name": "🌷 С букетом тюльпанов",
-        "prompt": "The person from my photo without changing facial features, hair color or eye color. A woman stands holding a lush bouquet of pink and white tulips tied with a satin ribbon. Background: large decorative number '8' made of fresh flowers and pink balloons, soft bokeh. Spring holiday atmosphere — flower petals in the air, gentle pink-peach light. Outfit — elegant light dress. Shot on Canon EOS R5 with 85mm f/1.4 lens, soft studio lighting with warm pink accent, natural shadows, depth of field. Professional fashion photography, magazine quality, 8K. Text 'С 8 Марта!' in elegant gold letters at the top of the image."
+STYLE_TEMPLATES = {
+    "style_party": {
+        "name": "💃 Красная дорожка",
+        "prompt": "The person from my photo without changing facial features, hair color or eye color. A glamorous woman walking the red carpet at a luxurious Hollywood premiere. Wearing a stunning floor-length sequined evening gown, professional hair and makeup. Paparazzi flashes in the background, velvet rope barriers, elegant guests. Shot on Canon EOS R5, 85mm f/1.4, dramatic lighting, magazine quality, 8K."
     },
-    "m8_garden": {
-        "name": "🌸 В цветущем саду",
-        "prompt": "The person from my photo without changing facial features, hair color or eye color. A woman stands in a blooming spring garden surrounded by pink cherry blossoms and tulips. Gentle morning light filtering through flower petals, dreamy romantic atmosphere. Elegant floral dress, hair adorned with small flowers. Shot on Sony A7R IV with 50mm f/1.2 lens, golden hour lighting, soft bokeh background. Text 'С 8 Марта!' in delicate pink letters. Professional photography, magazine quality, 8K."
+    "style_beach": {
+        "name": "🌴 Лето / пляж",
+        "prompt": "The person from my photo without changing facial features, hair color or eye color. A woman relaxing on a beautiful tropical beach with crystal clear turquoise water. Wearing a stylish summer dress, hair flowing in the breeze. White sand beach, palm trees, golden sunshine, distant sailboats on the horizon. Shot on Sony A7R IV, 50mm f/1.8, golden hour lighting, vacation mood, 8K."
     },
-    "m8_luxury": {
-        "name": "✨ Роскошный портрет",
-        "prompt": "The person from my photo without changing facial features, hair color or eye color. A glamorous woman holding a large bouquet of red roses, wearing an elegant evening gown. Background of golden bokeh lights and rose petals falling. Luxurious atmosphere, professional studio setup. Shot on Hasselblad H6D with 100mm f/2.2 lens, dramatic studio lighting with soft fill. Text 'С 8 Марта!' in golden elegant script at top. High fashion photography, Vogue style, 8K resolution."
+    "style_queen": {
+        "name": "👑 Королева / роскошь",
+        "prompt": "The person from my photo without changing facial features, hair color or eye color. A regal woman portrayed as a queen in an opulent palace interior. Wearing an elaborate royal gown with jeweled crown, pearl necklace and diamond earrings. Ornate golden throne, velvet drapes, candlelit chandeliers, marble floors. Shot on Hasselblad H6D, dramatic royal lighting, Renaissance painting style, 8K."
     },
-    "m8_minimal": {
-        "name": "🤍 Нежный минимализм",
-        "prompt": "The person from my photo without changing facial features, hair color or eye color. A woman in a simple white elegant dress holding a single pink peony against a clean white background with soft pink accents. Minimalist aesthetic, soft natural window light. Shot on Leica Q2 with 28mm f/1.7 lens, clean bright airy photography style. Text 'С 8 Марта!' in soft rose gold letters. Modern minimalist fashion photography, 8K."
+    "style_business": {
+        "name": "💼 Деловая женщина",
+        "prompt": "The person from my photo without changing facial features, hair color or eye color. A confident successful businesswoman in a modern glass office skyscraper. Wearing an elegant tailored suit, standing by floor-to-ceiling windows with city skyline view. Professional posture, slight smile, holding a tablet. Shot on Canon EOS R5, 35mm f/2.0, clean corporate lighting, Forbes magazine style, 8K."
+    },
+    "style_picnic": {
+        "name": "🧺 Майский пикник",
+        "prompt": "The person from my photo without changing facial features, hair color or eye color. A woman sitting on a cozy plaid blanket on fresh green spring grass in May. Next to her is a wicker picnic basket filled with food and drinks, bottles of lemonade. In the background her red convertible car is parked with the top down. On the blanket lie badminton rackets, a frisbee and a ball. Everything feels fresh and alive — young bright green leaves on trees, wildflowers, warm spring sunlight. Shot on Sony A7R IV, 50mm f/1.4, natural daylight, lifestyle photography, 8K."
+    },
+    "style_hammock": {
+        "name": "🍎 Гамак / дача",
+        "prompt": "The person from my photo without changing facial features, hair color or eye color. A woman lying in a cozy fabric hammock strung between two blooming apple trees in a Russian dacha garden. Apple blossoms falling gently around her, green grass below, a wooden dacha house visible in the background. She looks relaxed and happy, holding a book or a cup of tea. Soft warm afternoon light filtering through the apple tree leaves. Shot on Canon EOS R5, 85mm f/1.4, soft natural bokeh, cozy summer dacha atmosphere, 8K."
     },
 }
 
@@ -164,12 +172,12 @@ def tariff_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
-def march8_keyboard() -> InlineKeyboardMarkup:
+def styles_keyboard() -> InlineKeyboardMarkup:
     buttons = []
-    for key, t in MARCH8_TEMPLATES.items():
+    for key, t in STYLE_TEMPLATES.items():
         buttons.append([InlineKeyboardButton(
             text=t["name"],
-            callback_data=f"m8_{key}"
+            callback_data=f"style_{key}"
         )])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
@@ -266,7 +274,7 @@ async def process_generation(message: types.Message, user_id: int, prompt: str, 
         )
         return
 
-    await message.answer(f"⏳ Генерирую открытку... (осталось: {credits})")
+    await message.answer(f"⏳ Генерирую... подожди немного (осталось: {credits})")
 
     try:
         if user_id in user_photos:
@@ -319,10 +327,12 @@ async def cmd_start(message: types.Message):
         await message.answer(
             f"👋 Привет! Я генерирую изображения с помощью ИИ.\n\n"
             f"🎁 Тебе начислено *{FREE_CREDITS} бесплатные генерации* — попробуй!\n\n"
-            "🌷 *Открытки к 8 марта* — /march8\n\n"
+            "✨ *Готовые образы* — /styles\n\n"
             "🖼 *Без фото* — напиши текст, создам картинку.\n\n"
             "🧑‍🎨 *С твоим фото* — отправь фото + описание, перенесу тебя в новую сцену с сохранением лица.\n\n"
-            "⚠️ Для генерации с фото нужно *реальное фото* — рисунки и аниме не поддерживаются.\n\n"
+            "⚠️ Для генерации с фото:\n"
+            "• Нужно *реальное фото* — рисунки и аниме не поддерживаются\n"
+            "• На фото должен быть *один человек* — групповые фото не поддерживаются\n\n"
             "💰 Купить генерации — /buy\n"
             "💳 Баланс — /balance",
             parse_mode="Markdown"
@@ -330,7 +340,7 @@ async def cmd_start(message: types.Message):
     else:
         await message.answer(
             f"👋 Привет! Рада тебя видеть снова!\n\n"
-            f"🌷 Открытки к 8 марта — /march8\n\n"
+            f"✨ Готовые образы — /styles\n\n"
             f"💳 У тебя: *{credits} генераций*\n\n"
             "💰 Купить генерации — /buy\n"
             "💳 Баланс — /balance",
@@ -338,20 +348,20 @@ async def cmd_start(message: types.Message):
         )
 
 
-@dp.message(Command("march8"))
-async def cmd_march8(message: types.Message):
+@dp.message(Command("styles"))
+async def cmd_styles(message: types.Message):
     if message.from_user.id not in user_photos:
         await message.answer(
-            "🌷 *Открытки к 8 марта!*\n\n"
-            "Сначала отправь своё фото — я сохраню его и предложу стили открыток 😊\n\n"
-            "⚠️ Нужно реальное фото с чётким лицом.",
+            "✨ *Готовые образы*\n\n"
+            "Сначала отправь своё фото — я сохраню его и предложу стили 😊\n\n"
+            "⚠️ Нужно реальное фото с одним человеком и чётким лицом.",
             parse_mode="Markdown"
         )
     else:
         await message.answer(
-            "🌷 *Выбери стиль открытки к 8 марта:*",
+            "✨ *Выбери образ:*",
             parse_mode="Markdown",
-            reply_markup=march8_keyboard()
+            reply_markup=styles_keyboard()
         )
 
 
@@ -408,11 +418,12 @@ async def process_paid(callback: types.CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@dp.callback_query(lambda c: c.data.startswith("m8_"))
-async def process_march8_template(callback: types.CallbackQuery):
+@dp.callback_query(lambda c: c.data.startswith("style_"))
+async def process_style_template(callback: types.CallbackQuery):
     user_id = callback.from_user.id
-    template_key = callback.data[3:]
-    template = MARCH8_TEMPLATES.get(template_key)
+    # убираем двойной префикс style_style_
+    template_key = callback.data[6:]
+    template = STYLE_TEMPLATES.get(template_key)
 
     if not template:
         await callback.answer("Ошибка")
@@ -420,7 +431,7 @@ async def process_march8_template(callback: types.CallbackQuery):
 
     if user_id not in user_photos:
         await callback.message.answer(
-            "⚠️ Сначала отправь своё фото! Без фото не могу создать открытку с твоим лицом 😊"
+            "⚠️ Сначала отправь своё фото! Без фото не могу создать образ с твоим лицом 😊"
         )
         await callback.answer()
         return
@@ -493,18 +504,22 @@ async def handle_message(message: types.Message):
             file = await bot.get_file(photo.file_id)
             downloaded = await bot.download_file(file.file_path)
             image_bytes = downloaded.read()
+
+            # Проверка на групповое фото — предупреждение
+            img = Image.open(BytesIO(image_bytes))
             image_base64 = compress_image(image_bytes)
             user_photos[user_id] = image_base64
 
-            if True:
-                await message.answer(
-                    "📸 Фото сохранено!\n\n"
-                    "🌷 Хочешь открытку к *8 марта*? Нажми /march8\n\n"
-                    "Или напишите описание — как изменить образ.\n"
-                    "Можно на *русском* или *английском* 😊\n\n"
-                    "⚠️ *Важно:* подходят только реальные фото людей — рисунки и аниме не поддерживаются.",
-                    parse_mode="Markdown"
-                )
+            await message.answer(
+                "📸 Фото сохранено!\n\n"
+                "✨ Хочешь примерить готовый образ? Нажми /styles\n\n"
+                "Или напиши своё описание — как изменить образ.\n"
+                "Можно на *русском* или *английском* 😊\n\n"
+                "⚠️ *Важно:*\n"
+                "• Подходят только реальные фото людей — рисунки и аниме не поддерживаются\n"
+                "• На фото должен быть *один человек* — с групповыми фото бот не работает",
+                parse_mode="Markdown"
+            )
         except Exception as e:
             logger.error(f"Ошибка фото: {e}")
             await message.answer("❌ Не удалось обработать фото.")
