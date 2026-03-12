@@ -44,7 +44,7 @@ STYLE_TEMPLATES = {
     },
     "style_queen": {
         "name": "👑 Королева / роскошь",
-        "prompt": "The person from my photo without changing facial features, hair color or eye color. A regal woman portrayed as a queen in an opulent palace interior. Wearing an elaborate royal gown with jeweled crown, pearl necklace and diamond earrings. Ornate golden throne, velvet drapes, candlelit chandeliers, marble floors. Shot on Hasselblad H6D, dramatic royal lighting, Renaissance painting style, 8K."
+        "prompt": "The person from my photo without changing facial features, hair color or eye color. A regal woman portrayed as a queen in an opulent palace interior. Hair styled in an elegant royal updo with soft curls and braids, decorated with pearls and golden pins. Wearing an elaborate royal gown with jeweled crown placed on the updo, pearl necklace and diamond earrings. Ornate golden throne, velvet drapes, candlelit chandeliers, marble floors. Shot on Hasselblad H6D, dramatic royal lighting, Renaissance painting style, 8K."
     },
     "style_business": {
         "name": "💼 Деловая женщина",
@@ -66,7 +66,7 @@ dp = Dispatcher(storage=storage)
 client = OpenAI(api_key=OPENAI_API_KEY)
 
 user_photos: dict[int, str] = {}
-user_model: dict[int, str] = {}  # хранит выбранную модель: "flux" или "banana"
+user_model: dict[int, str] = {}
 db_pool = None
 
 
@@ -182,8 +182,6 @@ def translate_prompt(user_prompt: str) -> str:
 
 
 async def upload_to_fal(image_base64: str) -> str:
-    """Загружает base64 фото на fal.ai storage и возвращает публичный URL"""
-    image_bytes = base64.b64decode(image_base64)
     async with httpx.AsyncClient(timeout=60) as http:
         response = await http.post(
             "https://rest.alpha.fal.ai/storage/upload/base64",
@@ -198,7 +196,6 @@ async def upload_to_fal(image_base64: str) -> str:
             }
         )
         if response.status_code != 200:
-            # Fallback: используем data URI напрямую
             return f"data:image/jpeg;base64,{image_base64}"
         result = response.json()
         return result.get("url", f"data:image/jpeg;base64,{image_base64}")
@@ -283,7 +280,7 @@ async def process_generation(message: types.Message, user_id: int, prompt: str, 
         await message.answer("💳 У тебя закончились генерации!\n\nПополни баланс командой /buy 😊")
         return
 
-    model = user_model.get(user_id, "flux")
+    model = user_model.get(user_id, "banana")
     model_name = "🍌 Nano Banana" if model == "banana" else "⚡ Flux PuLID"
     await message.answer(f"⏳ Генерирую [{model_name}]... подожди немного (осталось: {credits})")
 
