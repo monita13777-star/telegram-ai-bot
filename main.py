@@ -25,7 +25,7 @@ DATABASE_URL = os.getenv("DATABASE_PUBLIC_URL")
 ADMIN_ID = 1991186266
 
 TARIFFS = {
-    "1": {"name": "1 фото", "count": 1, "price": 29},
+    "1": {"name": "1 фото", "count": 1, "price": 39},
     "10": {"name": "10 фото", "count": 10, "price": 199},
     "30": {"name": "30 фото", "count": 30, "price": 490},
     "100": {"name": "100 фото", "count": 100, "price": 1490},
