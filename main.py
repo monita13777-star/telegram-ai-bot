@@ -43,7 +43,7 @@ STYLE_TEMPLATES = {
     "maldives_f": {"name": "🌊 Мальдивы (жен)", "prompt": "The person from my photo without changing facial features, hair color or eye color. A woman relaxing at a luxurious overwater bungalow in the Maldives. Wearing an elegant resort dress, standing on a private deck above crystal-clear turquoise water. Tropical sunset, coral reef visible below, white sand island in distance, swaying palm trees. Shot on Sony A7R IV, 50mm f/1.8, golden hour tropical lighting, luxury travel magazine, 8K."},
     "maldives_m": {"name": "🌊 Мальдивы (муж)", "prompt": "The person from my photo without changing facial features, hair color or eye color. A man relaxing at a luxurious overwater bungalow in the Maldives. Wearing elegant resort shorts and linen shirt, standing on a private deck above crystal-clear turquoise water. Tropical sunset, coral reef visible below, white sand island in distance. Shot on Sony A7R IV, 50mm f/1.8, golden hour tropical lighting, luxury travel magazine, 8K."},
     "jungle_f": {"name": "🌿 Тропики (жен)", "prompt": "The person from my photo without changing facial features, hair color or eye color. A woman deep in a magical tropical rainforest. Wearing a light flowy boho dress, surrounded by giant ferns, exotic flowers, hanging vines. Mystical waterfall in background, shafts of golden light through dense jungle canopy, butterflies and exotic birds. Shot on Canon EOS R5, 50mm f/1.4, ethereal natural lighting, National Geographic style, 8K."},
-    "jungle_m": {"name": "🌿 Тропики (муж)", "prompt": "The person from my photo without changing facial features, hair color or eye color. A man deep in a magical tropical rainforest. Wearing adventure khaki outfit, surrounded by giant ferns, exotic flowers, hanging vines. Mystical waterfall in background, shafts of golden light through dense jungle canopy, exotic birds. Shot on Canon EOS R5, 50mm f/1.4, ethereal natural lighting, National Geographic style, 8K."},
+    "wildwest_m": {"name": "🤠 Дикий Запад (муж)", "prompt": "The person from my photo without changing facial features, hair color or eye color. A rugged cowboy man in the Wild West. Wearing a worn leather cowboy hat, dusty denim shirt, leather vest, boots and spurs. Standing in a vast desert landscape at golden sunset, red rock canyon formations in background, horse visible beside him, dust in the air. Shot on Canon EOS R5, 35mm f/2.0, dramatic golden hour lighting, cinematic Western style, 8K."},
     "rock_f": {"name": "🎸 Рок (жен)", "prompt": "The person from my photo without changing facial features, hair color or eye color. A rock star woman performing on a massive concert stage. Wearing a leather jacket, fishnet stockings, boots, and rock accessories. Electric guitar in hand, dramatic stage lighting with red and purple spotlights, smoke machines, screaming crowd of thousands below, pyrotechnics exploding behind her. Shot on Canon EOS R3, 85mm f/1.4, dramatic concert lighting, Rolling Stone magazine style, 8K."},
     "rock_m": {"name": "🎸 Рок (муж)", "prompt": "The person from my photo without changing facial features, hair color or eye color. A rock star man performing on a massive concert stage. Wearing a leather jacket, ripped jeans, and rock accessories. Electric guitar in hand, dramatic stage lighting with red and purple spotlights, smoke machines, screaming crowd of thousands below, pyrotechnics exploding behind him. Shot on Canon EOS R3, 85mm f/1.4, dramatic concert lighting, Rolling Stone magazine style, 8K."},
 }
@@ -356,10 +356,7 @@ async def cmd_start(message: types.Message):
             "✨ *Готовые образы* — /styles\n\n"
             "🖼 *Без фото* — напиши текст, создам картинку.\n\n"
             "🧑‍🎨 *С твоим фото* — отправь фото + описание, перенесу тебя в новую сцену с сохранением лица.\n\n"
-            "👥 *Парное фото* — отправь 2 фото разных людей и я помещу их вместе! — /duo\n\n"
-            "⚠️ Для генерации с фото:\n"
-            "• Только реальные фото людей — рисунки и аниме не поддерживаются\n"
-            "• На фото должен быть *один человек*\n\n"
+            "👥 *Парное фото* — отправь 2 фото и я помещу людей вместе! — /duo\n\n"
             "💰 Купить генерации — /buy\n"
             "💳 Баланс — /balance",
             parse_mode="Markdown"
@@ -380,8 +377,7 @@ async def cmd_styles(message: types.Message):
     if message.from_user.id not in user_photos:
         await message.answer(
             "✨ *Готовые образы*\n\n"
-            "Сначала отправь своё фото — я сохраню его и предложу стили 😊\n\n"
-            "⚠️ Нужно реальное фото с одним человеком и чётким лицом.",
+            "Сначала отправь своё фото — я сохраню его и предложу стили 😊",
             parse_mode="Markdown"
         )
     else:
@@ -630,14 +626,10 @@ async def handle_message(message: types.Message, state: FSMContext):
             user_photos[user_id] = image_base64
 
             await message.answer(
-                "📸 Фото сохранено!\n\n"
-                "Выбери модель генерации:\n\n"
+                "📸 Фото сохранено! Выбери модель генерации:\n\n"
                 "🍌 *Nano Banana* — более реалистичный результат\n"
                 "⚡ *Flux PuLID* — точнее сохраняет черты лица\n"
-                "👥 *Парное фото* — добавить второго человека\n\n"
-                "⚠️ *Важно:*\n"
-                "• Только реальные фото людей — рисунки и аниме не поддерживаются\n"
-                "• На фото должен быть *один человек*",
+                "👥 *Парное фото* — добавить второго человека",
                 parse_mode="Markdown",
                 reply_markup=model_choice_keyboard()
             )
