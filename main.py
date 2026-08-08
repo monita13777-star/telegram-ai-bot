@@ -136,6 +136,7 @@ def model_choice_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="🍌 Nano Banana — реалистичнее", callback_data="model_banana")],
         [InlineKeyboardButton(text="⚡ Flux PuLID — чёткое лицо", callback_data="model_flux")],
         [InlineKeyboardButton(text="👥 Парное фото (2 лица)", callback_data="model_duo")],
+        [InlineKeyboardButton(text="🎬 Видео из фото", callback_data="model_video")],
     ])
 
 
@@ -275,6 +276,33 @@ async def generate_with_nano_banana_duo(image_base64_1: str, image_base64_2: str
         return img_response.content
 
 
+async def generate_video(image_base64: str, prompt: str) -> bytes:
+    image_url = await upload_to_fal(image_base64)
+    async with httpx.AsyncClient(timeout=300) as http:
+        gen_response = await http.post(
+            "https://fal.run/fal-ai/kling-video/v1.6/standard/image-to-video",
+            headers={"Authorization": f"Key {FAL_API_KEY}", "Content-Type": "application/json"},
+            json={
+                "prompt": prompt,
+                "image_url": image_url,
+                "duration": "5",
+                "aspect_ratio": "9:16",
+            }
+        )
+        logger.info(f"Kling Video статус: {gen_response.status_code}")
+        if gen_response.status_code == 500:
+            raise ValueError("Сервер видео временно недоступен. Попробуйте ещё раз через минуту.")
+        try:
+            gen_data = gen_response.json()
+        except Exception:
+            raise ValueError(f"Неожиданный ответ видео: {gen_response.text[:200]}")
+        if "video" not in gen_data:
+            raise ValueError(f"Ошибка генерации видео: {gen_data}")
+        video_url = gen_data["video"]["url"]
+        video_response = await http.get(video_url)
+        return video_response.content
+
+
 async def generate_text_only(prompt: str) -> bytes:
     translated_prompt = translate_prompt(prompt)
     _, openai_size = detect_image_size(prompt + " " + translated_prompt)
@@ -344,6 +372,10 @@ class DuoState(StatesGroup):
     waiting_prompt = State()
 
 
+class VideoState(StatesGroup):
+    waiting_prompt = State()
+
+
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     user_id = message.from_user.id
@@ -351,12 +383,13 @@ async def cmd_start(message: types.Message):
     credits = await get_credits(user_id)
     if is_new:
         await message.answer(
-            f"👋 Привет! Я генерирую изображения с помощью ИИ.\n\n"
+            f"👋 Привет! Я генерирую изображения и видео с помощью ИИ.\n\n"
             f"🎁 Тебе начислено *{FREE_CREDITS} бесплатных генерации* — попробуй!\n\n"
             "✨ *Готовые образы* — /styles\n\n"
             "🖼 *Без фото* — напиши текст, создам картинку.\n\n"
             "🧑‍🎨 *С твоим фото* — отправь фото + описание, перенесу тебя в новую сцену с сохранением лица.\n\n"
             "👥 *Парное фото* — отправь 2 фото и я помещу людей вместе! — /duo\n\n"
+            "🎬 *Видео из фото* — оживи своё фото! — /video\n\n"
             "💰 Купить генерации — /buy\n"
             "💳 Баланс — /balance",
             parse_mode="Markdown"
@@ -367,7 +400,8 @@ async def cmd_start(message: types.Message):
             f"✨ Готовые образы — /styles\n\n"
             f"💳 У тебя: *{credits} генераций*\n\n"
             "💰 Купить генерации — /buy\n"
-            "👥 Парное фото — /duo",
+            "👥 Парное фото — /duo\n"
+            "🎬 Видео из фото — /video",
             parse_mode="Markdown"
         )
 
@@ -394,6 +428,29 @@ async def cmd_duo(message: types.Message, state: FSMContext):
     await message.answer(
         "👥 *Парное фото*\n\n"
         "Отправь фото *первого человека* 👤",
+        parse_mode="Markdown"
+    )
+
+
+@dp.message(Command("video"))
+async def cmd_video(message: types.Message, state: FSMContext):
+    user_id = message.from_user.id
+    if user_id not in user_photos:
+        await message.answer(
+            "🎬 *Видео из фото*\n\n"
+            "Сначала отправь своё фото — я сохраню его и создам видео 😊",
+            parse_mode="Markdown"
+        )
+        return
+    await state.set_state(VideoState.waiting_prompt)
+    await message.answer(
+        "🎬 *Видео из фото*\n\n"
+        "Фото сохранено! Теперь напиши что должно происходить в видео.\n\n"
+        "Примеры:\n"
+        "• улыбается и поворачивает голову\n"
+        "• ветер развевает волосы, лёгкая улыбка\n"
+        "• моргает и смотрит в камеру\n\n"
+        "⏱ Генерация занимает 1-2 минуты",
         parse_mode="Markdown"
     )
 
@@ -487,6 +544,39 @@ async def duo_prompt(message: types.Message, state: FSMContext):
         await state.clear()
 
 
+@dp.message(VideoState.waiting_prompt)
+async def video_prompt(message: types.Message, state: FSMContext):
+    if not message.text:
+        await message.answer("⚠️ Пожалуйста, напиши описание движения.")
+        return
+
+    user_id = message.from_user.id
+    credits = await get_credits(user_id)
+    if credits <= 0:
+        await message.answer("💳 У тебя закончились генерации!\n\nПополни баланс командой /buy 😊")
+        await state.clear()
+        return
+
+    prompt = translate_prompt(message.text.strip())
+    await message.answer(f"⏳ Генерирую видео [🎬 Kling]... это займёт 1-2 минуты (осталось: {credits})")
+
+    try:
+        video_bytes = await generate_video(user_photos[user_id], prompt)
+        await use_credit(user_id)
+        remaining = await get_credits(user_id)
+        video_file = BufferedInputFile(video_bytes, filename="video.mp4")
+        await message.answer_video(
+            video_file,
+            caption=f"✅ Видео готово! Осталось: *{remaining} генераций*\n\n🎬 Ещё видео — /video",
+            parse_mode="Markdown"
+        )
+    except Exception as e:
+        logger.error(f"[{user_id}] Ошибка видео: {e}", exc_info=True)
+        await message.answer(f"❌ Ошибка:\n`{str(e)[:300]}`", parse_mode="Markdown")
+    finally:
+        await state.clear()
+
+
 @dp.callback_query(lambda c: c.data.startswith("model_"))
 async def process_model_choice(callback: types.CallbackQuery, state: FSMContext):
     user_id = callback.from_user.id
@@ -497,6 +587,21 @@ async def process_model_choice(callback: types.CallbackQuery, state: FSMContext)
         await callback.message.edit_text(
             "👥 *Парное фото*\n\n"
             "Отправь фото *первого человека* 👤",
+            parse_mode="Markdown"
+        )
+        await callback.answer()
+        return
+
+    if model == "video":
+        await state.set_state(VideoState.waiting_prompt)
+        await callback.message.edit_text(
+            "🎬 *Видео из фото*\n\n"
+            "Напиши что должно происходить в видео.\n\n"
+            "Примеры:\n"
+            "• улыбается и поворачивает голову\n"
+            "• ветер развевает волосы, лёгкая улыбка\n"
+            "• моргает и смотрит в камеру\n\n"
+            "⏱ Генерация занимает 1-2 минуты",
             parse_mode="Markdown"
         )
         await callback.answer()
@@ -626,10 +731,11 @@ async def handle_message(message: types.Message, state: FSMContext):
             user_photos[user_id] = image_base64
 
             await message.answer(
-                "📸 Фото сохранено! Выбери модель генерации:\n\n"
-                "🍌 *Nano Banana* — более реалистичный результат\n"
-                "⚡ *Flux PuLID* — точнее сохраняет черты лица\n"
-                "👥 *Парное фото* — добавить второго человека",
+                "📸 Фото сохранено! Выбери что делаем:\n\n"
+                "🍌 *Nano Banana* — реалистичное фото\n"
+                "⚡ *Flux PuLID* — чёткое сохранение лица\n"
+                "👥 *Парное фото* — добавить второго человека\n"
+                "🎬 *Видео* — оживить фото",
                 parse_mode="Markdown",
                 reply_markup=model_choice_keyboard()
             )
