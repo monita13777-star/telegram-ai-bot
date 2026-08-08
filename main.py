@@ -54,6 +54,7 @@ dp = Dispatcher(storage=storage)
 client = OpenAI(api_key=OPENAI_API_KEY)
 
 user_photos: dict[int, str] = {}
+user_photos2: dict[int, str] = {}
 user_model: dict[int, str] = {}
 db_pool = None
 
@@ -132,8 +133,9 @@ def detect_image_size(prompt: str) -> tuple[str, str]:
 
 def model_choice_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="⚡ Flux PuLID — чёткое лицо", callback_data="model_flux")],
         [InlineKeyboardButton(text="🍌 Nano Banana — реалистичнее", callback_data="model_banana")],
+        [InlineKeyboardButton(text="⚡ Flux PuLID — чёткое лицо", callback_data="model_flux")],
+        [InlineKeyboardButton(text="👥 Парное фото (2 лица)", callback_data="model_duo")],
     ])
 
 
@@ -243,6 +245,36 @@ async def generate_with_nano_banana(image_base64: str, prompt: str) -> bytes:
         return img_response.content
 
 
+async def generate_with_nano_banana_duo(image_base64_1: str, image_base64_2: str, prompt: str) -> bytes:
+    image_url_1 = await upload_to_fal(image_base64_1)
+    image_url_2 = await upload_to_fal(image_base64_2)
+    async with httpx.AsyncClient(timeout=180) as http:
+        gen_response = await http.post(
+            "https://fal.run/fal-ai/nano-banana/edit",
+            headers={"Authorization": f"Key {FAL_API_KEY}", "Content-Type": "application/json"},
+            json={
+                "prompt": prompt + ". Keep the exact faces, ages, and appearances of both people from the reference photos. Two people together. Photorealistic, high quality.",
+                "image_urls": [image_url_1, image_url_2],
+                "num_images": 1,
+                "aspect_ratio": "auto",
+                "output_format": "png",
+                "safety_tolerance": "4",
+            }
+        )
+        logger.info(f"Nano Banana DUO статус: {gen_response.status_code}")
+        if gen_response.status_code == 500:
+            raise ValueError("Сервер Nano Banana временно недоступен. Попробуйте ещё раз через минуту.")
+        try:
+            gen_data = gen_response.json()
+        except Exception:
+            raise ValueError(f"Неожиданный ответ Nano Banana: {gen_response.text[:200]}")
+        if "images" not in gen_data:
+            raise ValueError(f"Ошибка Nano Banana: {gen_data}")
+        result_url = gen_data["images"][0]["url"]
+        img_response = await http.get(result_url)
+        return img_response.content
+
+
 async def generate_text_only(prompt: str) -> bytes:
     translated_prompt = translate_prompt(prompt)
     _, openai_size = detect_image_size(prompt + " " + translated_prompt)
@@ -306,6 +338,12 @@ class PaymentState(StatesGroup):
     waiting_receipt = State()
 
 
+class DuoState(StatesGroup):
+    waiting_photo1 = State()
+    waiting_photo2 = State()
+    waiting_prompt = State()
+
+
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     user_id = message.from_user.id
@@ -318,6 +356,7 @@ async def cmd_start(message: types.Message):
             "✨ *Готовые образы* — /styles\n\n"
             "🖼 *Без фото* — напиши текст, создам картинку.\n\n"
             "🧑‍🎨 *С твоим фото* — отправь фото + описание, перенесу тебя в новую сцену с сохранением лица.\n\n"
+            "👥 *Парное фото* — отправь 2 фото разных людей и я помещу их вместе! — /duo\n\n"
             "⚠️ Для генерации с фото:\n"
             "• Только реальные фото людей — рисунки и аниме не поддерживаются\n"
             "• На фото должен быть *один человек*\n\n"
@@ -330,7 +369,8 @@ async def cmd_start(message: types.Message):
             f"👋 Привет! Рада тебя видеть снова!\n\n"
             f"✨ Готовые образы — /styles\n\n"
             f"💳 У тебя: *{credits} генераций*\n\n"
-            "💰 Купить генерации — /buy",
+            "💰 Купить генерации — /buy\n"
+            "👥 Парное фото — /duo",
             parse_mode="Markdown"
         )
 
@@ -352,6 +392,16 @@ async def cmd_styles(message: types.Message):
         )
 
 
+@dp.message(Command("duo"))
+async def cmd_duo(message: types.Message, state: FSMContext):
+    await state.set_state(DuoState.waiting_photo1)
+    await message.answer(
+        "👥 *Парное фото*\n\n"
+        "Отправь фото *первого человека* 👤",
+        parse_mode="Markdown"
+    )
+
+
 @dp.message(Command("buy"))
 async def cmd_buy(message: types.Message):
     await message.answer("💳 Выбери пакет генераций:", reply_markup=tariff_keyboard())
@@ -368,13 +418,94 @@ async def cmd_balance(message: types.Message):
 async def cmd_reset(message: types.Message):
     user_photos.pop(message.from_user.id, None)
     user_model.pop(message.from_user.id, None)
+    user_photos2.pop(message.from_user.id, None)
     await message.answer("🔄 Фото сброшено.")
 
 
+@dp.message(DuoState.waiting_photo1)
+async def duo_photo1(message: types.Message, state: FSMContext):
+    if not message.photo:
+        await message.answer("⚠️ Пожалуйста, отправь фото первого человека.")
+        return
+    photo = message.photo[-1]
+    file = await bot.get_file(photo.file_id)
+    downloaded = await bot.download_file(file.file_path)
+    image_bytes = downloaded.read()
+    image_base64 = compress_image(image_bytes)
+    user_photos[message.from_user.id] = image_base64
+    await state.set_state(DuoState.waiting_photo2)
+    await message.answer("✅ Фото 1 сохранено!\n\nТеперь отправь фото *второго человека* 👤", parse_mode="Markdown")
+
+
+@dp.message(DuoState.waiting_photo2)
+async def duo_photo2(message: types.Message, state: FSMContext):
+    if not message.photo:
+        await message.answer("⚠️ Пожалуйста, отправь фото второго человека.")
+        return
+    photo = message.photo[-1]
+    file = await bot.get_file(photo.file_id)
+    downloaded = await bot.download_file(file.file_path)
+    image_bytes = downloaded.read()
+    image_base64 = compress_image(image_bytes)
+    user_photos2[message.from_user.id] = image_base64
+    await state.set_state(DuoState.waiting_prompt)
+    await message.answer("✅ Фото 2 сохранено!\n\nТеперь напиши промпт — опиши сцену где оба человека вместе 🎨", parse_mode="Markdown")
+
+
+@dp.message(DuoState.waiting_prompt)
+async def duo_prompt(message: types.Message, state: FSMContext):
+    if not message.text:
+        await message.answer("⚠️ Пожалуйста, напиши описание сцены.")
+        return
+
+    user_id = message.from_user.id
+    credits = await get_credits(user_id)
+    if credits <= 0:
+        await message.answer("💳 У тебя закончились генерации!\n\nПополни баланс командой /buy 😊")
+        await state.clear()
+        return
+
+    prompt = translate_prompt(message.text.strip())
+    await message.answer(f"⏳ Генерирую парное фото [🍌 Nano Banana]... подожди немного (осталось: {credits})")
+
+    try:
+        image_bytes = await generate_with_nano_banana_duo(
+            user_photos[user_id],
+            user_photos2[user_id],
+            prompt
+        )
+        await use_credit(user_id)
+        remaining = await get_credits(user_id)
+        photo_file = BufferedInputFile(image_bytes, filename="image.png")
+        await message.answer_photo(
+            photo_file,
+            caption=f"✅ Готово! Осталось: *{remaining} генераций*\n\n👥 Ещё парное фото — /duo",
+            parse_mode="Markdown"
+        )
+    except Exception as e:
+        logger.error(f"[{user_id}] Ошибка duo: {e}", exc_info=True)
+        await message.answer(f"❌ Ошибка:\n`{str(e)[:300]}`", parse_mode="Markdown")
+    finally:
+        user_photos.pop(user_id, None)
+        user_photos2.pop(user_id, None)
+        await state.clear()
+
+
 @dp.callback_query(lambda c: c.data.startswith("model_"))
-async def process_model_choice(callback: types.CallbackQuery):
+async def process_model_choice(callback: types.CallbackQuery, state: FSMContext):
     user_id = callback.from_user.id
     model = callback.data.split("_")[1]
+
+    if model == "duo":
+        await state.set_state(DuoState.waiting_photo1)
+        await callback.message.edit_text(
+            "👥 *Парное фото*\n\n"
+            "Отправь фото *первого человека* 👤",
+            parse_mode="Markdown"
+        )
+        await callback.answer()
+        return
+
     user_model[user_id] = model
     model_name = "🍌 Nano Banana" if model == "banana" else "⚡ Flux PuLID"
     await callback.message.edit_text(
@@ -481,9 +612,13 @@ async def cmd_add_credits(message: types.Message):
 
 
 @dp.message()
-async def handle_message(message: types.Message):
+async def handle_message(message: types.Message, state: FSMContext):
     user_id = message.from_user.id
     await init_user(user_id)
+
+    current_state = await state.get_state()
+    if current_state is not None:
+        return
 
     if message.photo and not message.caption:
         try:
@@ -497,8 +632,9 @@ async def handle_message(message: types.Message):
             await message.answer(
                 "📸 Фото сохранено!\n\n"
                 "Выбери модель генерации:\n\n"
+                "🍌 *Nano Banana* — более реалистичный результат\n"
                 "⚡ *Flux PuLID* — точнее сохраняет черты лица\n"
-                "🍌 *Nano Banana* — более реалистичный результат\n\n"
+                "👥 *Парное фото* — добавить второго человека\n\n"
                 "⚠️ *Важно:*\n"
                 "• Только реальные фото людей — рисунки и аниме не поддерживаются\n"
                 "• На фото должен быть *один человек*",
