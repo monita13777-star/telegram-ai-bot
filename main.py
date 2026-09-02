@@ -354,3 +354,307 @@ async def cmd_start(message: types.Message):
     user_id = message.from_user.id
     is_new = await init_user(user_id)
     credits = await get_credits(user_id)
+    if is_new:
+        await message.answer(
+            f"👋 Привет! Я генерирую изображения с помощью ИИ.\n\n"
+            f"🎁 Тебе начислено *{FREE_CREDITS} бесплатных генерации* — попробуй!\n\n"
+            "✨ *Готовые образы* — /styles\n\n"
+            "🖼 *Без фото* — напиши текст, создам картинку.\n\n"
+            "🧑‍🎨 *С твоим фото* — отправь фото + описание, перенесу тебя в новую сцену с сохранением лица.\n\n"
+            "👥 *Парное фото* — отправь 2 фото и я помещу людей вместе! — /duo\n\n"
+            "💰 Купить генерации — /buy\n"
+            "💳 Баланс — /balance",
+            parse_mode="Markdown"
+        )
+    else:
+        await message.answer(
+            f"👋 Привет! Рада тебя видеть снова!\n\n"
+            f"✨ Готовые образы — /styles\n\n"
+            f"💳 У тебя: *{credits} генераций*\n\n"
+            "💰 Купить генерации — /buy\n"
+            "👥 Парное фото — /duo",
+            parse_mode="Markdown"
+        )
+
+
+@dp.message(Command("styles"))
+async def cmd_styles(message: types.Message):
+    if message.from_user.id not in user_photos:
+        await message.answer(
+            "✨ *Готовые образы*\n\n"
+            "Сначала отправь своё фото — я сохраню его и предложу стили 😊",
+            parse_mode="Markdown"
+        )
+    else:
+        await message.answer(
+            "✨ *Выбери образ:*",
+            parse_mode="Markdown",
+            reply_markup=styles_keyboard()
+        )
+
+
+@dp.message(Command("duo"))
+async def cmd_duo(message: types.Message, state: FSMContext):
+    await state.set_state(DuoState.waiting_photo1)
+    await message.answer(
+        "👥 *Парное фото*\n\n"
+        "Отправь фото *первого человека* 👤",
+        parse_mode="Markdown"
+    )
+
+
+@dp.message(Command("buy"))
+async def cmd_buy(message: types.Message):
+    await message.answer("💳 Выбери пакет генераций:", reply_markup=tariff_keyboard())
+
+
+@dp.message(Command("balance"))
+async def cmd_balance(message: types.Message):
+    await init_user(message.from_user.id)
+    credits = await get_credits(message.from_user.id)
+    await message.answer(f"💳 У тебя *{credits} генераций*", parse_mode="Markdown")
+
+
+@dp.message(Command("reset"))
+async def cmd_reset(message: types.Message):
+    user_photos.pop(message.from_user.id, None)
+    user_model.pop(message.from_user.id, None)
+    user_photos2.pop(message.from_user.id, None)
+    await message.answer("🔄 Фото сброшено.")
+
+
+@dp.message(DuoState.waiting_photo1)
+async def duo_photo1(message: types.Message, state: FSMContext):
+    if not message.photo:
+        await message.answer("⚠️ Пожалуйста, отправь фото первого человека.")
+        return
+    photo = message.photo[-1]
+    file = await bot.get_file(photo.file_id)
+    downloaded = await bot.download_file(file.file_path)
+    image_bytes = downloaded.read()
+    image_base64 = compress_image(image_bytes)
+    user_photos[message.from_user.id] = image_base64
+    await state.set_state(DuoState.waiting_photo2)
+    await message.answer("✅ Фото 1 сохранено!\n\nТеперь отправь фото *второго человека* 👤", parse_mode="Markdown")
+
+
+@dp.message(DuoState.waiting_photo2)
+async def duo_photo2(message: types.Message, state: FSMContext):
+    if not message.photo:
+        await message.answer("⚠️ Пожалуйста, отправь фото второго человека.")
+        return
+    photo = message.photo[-1]
+    file = await bot.get_file(photo.file_id)
+    downloaded = await bot.download_file(file.file_path)
+    image_bytes = downloaded.read()
+    image_base64 = compress_image(image_bytes)
+    user_photos2[message.from_user.id] = image_base64
+    await state.set_state(DuoState.waiting_prompt)
+    await message.answer("✅ Фото 2 сохранено!\n\nТеперь напиши промпт — опиши сцену где оба человека вместе 🎨", parse_mode="Markdown")
+
+
+@dp.message(DuoState.waiting_prompt)
+async def duo_prompt(message: types.Message, state: FSMContext):
+    if not message.text:
+        await message.answer("⚠️ Пожалуйста, напиши описание сцены.")
+        return
+
+    user_id = message.from_user.id
+    credits = await get_credits(user_id)
+    if credits <= 0:
+        await message.answer("💳 У тебя закончились генерации!\n\nПополни баланс командой /buy 😊")
+        await state.clear()
+        return
+
+    prompt = translate_prompt(message.text.strip())
+    await message.answer(f"⏳ Генерирую парное фото [🍌 Nano Banana]... подожди немного (осталось: {credits})")
+
+    try:
+        image_bytes = await generate_with_nano_banana_duo(
+            user_photos[user_id],
+            user_photos2[user_id],
+            prompt
+        )
+        await use_credit(user_id)
+        remaining = await get_credits(user_id)
+        photo_file = BufferedInputFile(image_bytes, filename="image.png")
+        await message.answer_photo(
+            photo_file,
+            caption=f"✅ Готово! Осталось: *{remaining} генераций*\n\n👥 Ещё парное фото — /duo",
+            parse_mode="Markdown"
+        )
+    except Exception as e:
+        logger.error(f"[{user_id}] Ошибка duo: {e}", exc_info=True)
+        await message.answer(f"❌ Ошибка:\n`{str(e)[:300]}`", parse_mode="Markdown")
+    finally:
+        user_photos.pop(user_id, None)
+        user_photos2.pop(user_id, None)
+        await state.clear()
+
+
+@dp.callback_query(lambda c: c.data.startswith("model_"))
+async def process_model_choice(callback: types.CallbackQuery, state: FSMContext):
+    user_id = callback.from_user.id
+    model = callback.data.split("_")[1]
+
+    if model == "duo":
+        await state.set_state(DuoState.waiting_photo1)
+        await callback.message.edit_text(
+            "👥 *Парное фото*\n\n"
+            "Отправь фото *первого человека* 👤",
+            parse_mode="Markdown"
+        )
+        await callback.answer()
+        return
+
+    user_model[user_id] = model
+    model_name = "🍌 Nano Banana" if model == "banana" else "⚡ Flux PuLID"
+    await callback.message.edit_text(
+        f"✅ Выбрана модель: *{model_name}*\n\n"
+        "✨ Теперь выбери образ — /styles\n"
+        "Или напиши своё описание 😊",
+        parse_mode="Markdown"
+    )
+    await callback.answer()
+
+
+@dp.callback_query(lambda c: c.data.startswith("buy_"))
+async def process_buy(callback: types.CallbackQuery):
+    tariff_key = callback.data.split("_")[1]
+    tariff = TARIFFS.get(tariff_key)
+    if not tariff:
+        await callback.answer("Ошибка")
+        return
+    await callback.message.answer(
+        f"💳 *{tariff['name']} — {tariff['price']}₽*\n\n"
+        f"Переведи *{tariff['price']}₽* на Сбер:\n"
+        f"📱 `{PAYMENT_PHONE}`\n\n"
+        f"В комментарии укажи свой Telegram ID:\n"
+        f"`{callback.from_user.id}`\n\n"
+        f"После оплаты нажми кнопку ниже 👇",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="✅ Я оплатил(а)", callback_data=f"paid_{tariff_key}")]
+        ])
+    )
+    await callback.answer()
+
+
+@dp.callback_query(lambda c: c.data.startswith("paid_"))
+async def process_paid(callback: types.CallbackQuery, state: FSMContext):
+    tariff_key = callback.data.split("_")[1]
+    await state.set_state(PaymentState.waiting_receipt)
+    await state.update_data(tariff_key=tariff_key)
+    await callback.message.answer("📸 Отправь скриншот чека!")
+    await callback.answer()
+
+
+@dp.callback_query(lambda c: c.data.startswith("style_"))
+async def process_style_template(callback: types.CallbackQuery):
+    user_id = callback.from_user.id
+    template_key = callback.data[6:]
+    template = STYLE_TEMPLATES.get(template_key)
+    if not template:
+        await callback.answer("Ошибка")
+        return
+    if user_id not in user_photos:
+        await callback.message.answer("⚠️ Сначала отправь своё фото! Без фото не могу создать образ 😊")
+        await callback.answer()
+        return
+    await callback.answer()
+    await process_generation(callback.message, user_id, template["prompt"], is_template=True)
+
+
+@dp.message(PaymentState.waiting_receipt)
+async def process_receipt(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    tariff_key = data.get("tariff_key")
+    tariff = TARIFFS.get(tariff_key)
+    user_id = message.from_user.id
+    if message.photo:
+        await message.answer("⏳ Чек получен! Проверяем оплату — обычно до 15 минут.\nУведомим тебя как только начислим генерации!")
+        try:
+            await bot.send_photo(
+                chat_id=ADMIN_ID,
+                photo=message.photo[-1].file_id,
+                caption=(
+                    f"💳 Новая оплата!\n"
+                    f"👤 @{message.from_user.username} (ID: {user_id})\n"
+                    f"📦 {tariff['name']} — {tariff['price']}₽\n"
+                    f"➕ Начислить: /add_{user_id}_{tariff['count']}"
+                )
+            )
+        except Exception as e:
+            logger.error(f"Ошибка уведомления: {e}")
+        await state.clear()
+    else:
+        await message.answer("Пожалуйста, отправь именно фото чека.")
+
+
+@dp.message(lambda m: m.text and m.text.startswith("/add_"))
+async def cmd_add_credits(message: types.Message):
+    if message.from_user.id != ADMIN_ID:
+        return
+    try:
+        parts = message.text.split("_")
+        target_id = int(parts[1])
+        count = int(parts[2])
+        await add_credits(target_id, count)
+        credits = await get_credits(target_id)
+        await message.answer(f"✅ Начислено {count} генераций пользователю {target_id}")
+        await bot.send_message(
+            target_id,
+            f"✅ Оплата подтверждена!\nНачислено *{count} генераций*.\nТеперь у тебя: *{credits} генераций* 🎨",
+            parse_mode="Markdown"
+        )
+    except Exception as e:
+        logger.error(f"Ошибка начисления: {e}")
+        await message.answer("Ошибка. Формат: /add_USER_ID_COUNT")
+
+
+@dp.message()
+async def handle_message(message: types.Message, state: FSMContext):
+    user_id = message.from_user.id
+    await init_user(user_id)
+
+    current_state = await state.get_state()
+    if current_state is not None:
+        return
+
+    if message.photo and not message.caption:
+        try:
+            photo = message.photo[-1]
+            file = await bot.get_file(photo.file_id)
+            downloaded = await bot.download_file(file.file_path)
+            image_bytes = downloaded.read()
+            image_base64 = compress_image(image_bytes)
+            user_photos[user_id] = image_base64
+
+            await message.answer(
+                "📸 Фото сохранено! Выбери что делаем:\n\n"
+                "🍌 *Nano Banana* — реалистичное фото\n"
+                "⚡ *Flux PuLID* — чёткое сохранение лица\n"
+                "👥 *Парное фото* — добавить второго человека",
+                parse_mode="Markdown",
+                reply_markup=model_choice_keyboard()
+            )
+        except Exception as e:
+            logger.error(f"Ошибка фото: {e}")
+            await message.answer("❌ Не удалось обработать фото.")
+        return
+
+    if message.text:
+        prompt = message.text.strip()
+        if prompt.startswith("/"):
+            return
+        await process_generation(message, user_id, translate_prompt(prompt))
+
+
+async def main():
+    await init_db()
+    logger.info("Бот запущен!")
+    await dp.start_polling(bot)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
