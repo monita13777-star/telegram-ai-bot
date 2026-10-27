@@ -612,6 +612,164 @@ async def cmd_add_credits(message: types.Message):
         await message.answer("Ошибка. Формат: /add_USER_ID_COUNT")
 
 
+# ===================== Режим «Товар» (/product) =====================
+
+class ProductState(StatesGroup):
+    waiting_product = State()
+    waiting_model = State()
+    waiting_scene = State()
+
+
+PRODUCT_PROMPTS = {
+    "wear": (
+        "Take the garment or accessory shown in the FIRST image and put it on the person "
+        "from the SECOND image. Reproduce the item EXACTLY as in the first image: same cut, "
+        "silhouette, color, fabric texture, print, pattern, buttons, seams, logos and proportions. "
+        "Do not redesign it and do not invent details. Keep the exact face, hair and body "
+        "proportions of the person from the second image. Natural fit and fabric folds, "
+        "photorealistic, sharp focus, professional fashion photography."
+    ),
+    "hold": (
+        "The person from the SECOND image is naturally holding the product from the FIRST image "
+        "in their hands, with the front of the package facing the camera. Reproduce the product "
+        "EXACTLY as in the first image: same shape, proportions, colors, packaging, label, text "
+        "and logo. Do not redesign it and do not invent any text. Keep the exact face, hair and "
+        "body proportions of the person from the second image. Photorealistic, sharp focus, "
+        "professional lifestyle photography."
+    ),
+}
+
+
+async def generate_product_image(product_b64: str, model_b64: str, mode: str, scene: str) -> bytes:
+    product_url = await upload_to_fal(product_b64)
+    model_url = await upload_to_fal(model_b64)
+    prompt = PRODUCT_PROMPTS[mode]
+    if scene:
+        prompt += f" Scene and mood: {scene}."
+    async with httpx.AsyncClient(timeout=180) as http:
+        gen_response = await http.post(
+            "https://fal.run/fal-ai/nano-banana/edit",
+            headers={"Authorization": f"Key {FAL_API_KEY}", "Content-Type": "application/json"},
+            json={
+                "prompt": prompt,
+                "image_urls": [product_url, model_url],
+                "num_images": 1,
+                "aspect_ratio": "auto",
+                "output_format": "png",
+                "safety_tolerance": "4",
+            }
+        )
+        logger.info(f"Product mode статус: {gen_response.status_code}")
+        if gen_response.status_code == 500:
+            raise ValueError("Сервер Nano Banana временно недоступен. Попробуйте ещё раз через минуту.")
+        try:
+            gen_data = gen_response.json()
+        except Exception:
+            raise ValueError(f"Неожиданный ответ Nano Banana: {gen_response.text[:200]}")
+        if "images" not in gen_data:
+            raise ValueError(f"Ошибка Nano Banana: {gen_data}")
+        img_response = await http.get(gen_data["images"][0]["url"])
+        return img_response.content
+
+
+async def photo_to_base64(message: types.Message) -> str:
+    photo = message.photo[-1]
+    file = await bot.get_file(photo.file_id)
+    downloaded = await bot.download_file(file.file_path)
+    return compress_image(downloaded.read(), 1536)
+
+
+@dp.message(Command("cancel"))
+async def cmd_cancel(message: types.Message, state: FSMContext):
+    await state.clear()
+    await message.answer("🔄 Отменено. Можно начать заново.")
+
+
+@dp.message(Command("product"))
+async def cmd_product(message: types.Message, state: FSMContext):
+    await state.clear()
+    await message.answer(
+        "🛍 *Режим «Товар»*\n\nЧто делаем?",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="👗 Одежда / аксессуар на модель", callback_data="prod_wear")],
+            [InlineKeyboardButton(text="🍬 Товар в руках", callback_data="prod_hold")],
+        ])
+    )
+
+
+@dp.callback_query(lambda c: c.data in ("prod_wear", "prod_hold"))
+async def product_mode_choice(callback: types.CallbackQuery, state: FSMContext):
+    mode = callback.data.split("_")[1]
+    await state.update_data(mode=mode)
+    await state.set_state(ProductState.waiting_product)
+    await callback.message.edit_text(
+        "📦 Отправь чёткое фото *товара* (лучше на светлом фоне, без бликов на упаковке).\n\n"
+        "Отмена — /cancel",
+        parse_mode="Markdown"
+    )
+    await callback.answer()
+
+
+@dp.message(ProductState.waiting_product)
+async def product_photo(message: types.Message, state: FSMContext):
+    if not message.photo:
+        await message.answer("⚠️ Отправь фото товара (именно фото, не файл).")
+        return
+    await state.update_data(product=await photo_to_base64(message))
+    await state.set_state(ProductState.waiting_model)
+    await message.answer("✅ Товар сохранён!\n\nТеперь отправь фото *человека* (модели) 👤", parse_mode="Markdown")
+
+
+@dp.message(ProductState.waiting_model)
+async def product_model(message: types.Message, state: FSMContext):
+    if not message.photo:
+        await message.answer("⚠️ Отправь фото человека.")
+        return
+    await state.update_data(model=await photo_to_base64(message))
+    await state.set_state(ProductState.waiting_scene)
+    await message.answer(
+        "✅ Фото сохранено!\n\nОпиши сцену коротко (например: «уютная кухня, утренний свет»).\n"
+        "Если сцена не нужна — отправь «-»"
+    )
+
+
+@dp.message(ProductState.waiting_scene)
+async def product_scene(message: types.Message, state: FSMContext):
+    if not message.text:
+        await message.answer("⚠️ Напиши описание сцены или «-».")
+        return
+    user_id = message.from_user.id
+    credits = await get_credits(user_id)
+    if credits <= 0:
+        await message.answer("💳 У тебя закончились генерации!\n\nПополни баланс командой /buy 😊")
+        await state.clear()
+        return
+
+    data = await state.get_data()
+    text = message.text.strip()
+    scene = "" if text == "-" else translate_prompt(text)
+
+    await message.answer(f"⏳ Генерирую [🍌 Nano Banana]... подожди немного (осталось: {credits})")
+    try:
+        image_bytes = await generate_product_image(data["product"], data["model"], data["mode"], scene)
+        await use_credit(user_id)
+        remaining = await get_credits(user_id)
+        await message.answer_photo(
+            BufferedInputFile(image_bytes, filename="image.png"),
+            caption=f"✅ Готово! Осталось: *{remaining} генераций*\n\n🛍 Ещё товар — /product",
+            parse_mode="Markdown"
+        )
+    except Exception as e:
+        logger.error(f"[{user_id}] Ошибка product mode: {e}", exc_info=True)
+        await message.answer(f"❌ Ошибка:\n`{str(e)[:300]}`", parse_mode="Markdown")
+    finally:
+        await state.clear()
+
+
+# ===================== Конец режима «Товар» =====================
+
+
 @dp.message()
 async def handle_message(message: types.Message, state: FSMContext):
     user_id = message.from_user.id
