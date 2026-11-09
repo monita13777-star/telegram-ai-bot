@@ -770,6 +770,115 @@ async def product_scene(message: types.Message, state: FSMContext):
 # ===================== Конец режима «Товар» =====================
 
 
+# ===================== Режим «Товар без человека» (/scene) =====================
+
+class SceneState(StatesGroup):
+    waiting_product = State()
+    waiting_scene = State()
+
+
+SCENE_PROMPT = (
+    "Place the product from the reference image into a new scene. "
+    "Reproduce the product EXACTLY as in the reference: same shape, proportions, colors, "
+    "materials, every small detail, windows, balconies, text and logos unchanged. "
+    "Do not redesign it, do not add, remove or merge any parts. "
+    "No people in the frame. Natural shadows and perspective, photorealistic, sharp focus, "
+    "professional product photography."
+)
+
+
+async def generate_product_scene(product_b64: str, scene: str) -> bytes:
+    product_url = await upload_to_fal(product_b64)
+    prompt = SCENE_PROMPT
+    if scene:
+        prompt += f" Scene and mood: {scene}."
+    async with httpx.AsyncClient(timeout=180) as http:
+        gen_response = await http.post(
+            "https://fal.run/fal-ai/nano-banana/edit",
+            headers={"Authorization": f"Key {FAL_API_KEY}", "Content-Type": "application/json"},
+            json={
+                "prompt": prompt,
+                "image_urls": [product_url],
+                "num_images": 1,
+                "aspect_ratio": "auto",
+                "output_format": "png",
+                "safety_tolerance": "4",
+            }
+        )
+        logger.info(f"Scene mode статус: {gen_response.status_code}")
+        if gen_response.status_code == 500:
+            raise ValueError("Сервер Nano Banana временно недоступен. Попробуйте ещё раз через минуту.")
+        try:
+            gen_data = gen_response.json()
+        except Exception:
+            raise ValueError(f"Неожиданный ответ Nano Banana: {gen_response.text[:200]}")
+        if "images" not in gen_data:
+            raise ValueError(f"Ошибка Nano Banana: {gen_data}")
+        img_response = await http.get(gen_data["images"][0]["url"])
+        return img_response.content
+
+
+@dp.message(Command("scene"))
+async def cmd_scene(message: types.Message, state: FSMContext):
+    await state.clear()
+    await state.set_state(SceneState.waiting_product)
+    await message.answer(
+        "🏠 *Товар без человека*\n\n"
+        "Отправь чёткое фото *товара* (лучше на светлом фоне, без надписей поверх, "
+        "целиком в кадре).\n\nОтмена — /cancel",
+        parse_mode="Markdown"
+    )
+
+
+@dp.message(SceneState.waiting_product)
+async def scene_product_photo(message: types.Message, state: FSMContext):
+    if not message.photo:
+        await message.answer("⚠️ Отправь фото товара (именно фото, не файл).")
+        return
+    await state.update_data(product=await photo_to_base64(message))
+    await state.set_state(SceneState.waiting_scene)
+    await message.answer(
+        "✅ Товар сохранён!\n\nОпиши сцену коротко (например: «деревянный стол у окна, "
+        "новогодний вечер, гирлянда, снег за окном»).\nЕсли сцена не нужна — отправь «-»"
+    )
+
+
+@dp.message(SceneState.waiting_scene)
+async def scene_generate(message: types.Message, state: FSMContext):
+    if not message.text:
+        await message.answer("⚠️ Напиши описание сцены или «-».")
+        return
+    user_id = message.from_user.id
+    credits = await get_credits(user_id)
+    if credits <= 0:
+        await message.answer("💳 У тебя закончились генерации!\n\nПополни баланс командой /buy 😊")
+        await state.clear()
+        return
+
+    data = await state.get_data()
+    text = message.text.strip()
+    scene = "" if text == "-" else translate_prompt(text)
+
+    await message.answer(f"⏳ Генерирую [🍌 Nano Banana]... подожди немного (осталось: {credits})")
+    try:
+        image_bytes = await generate_product_scene(data["product"], scene)
+        await use_credit(user_id)
+        remaining = await get_credits(user_id)
+        await message.answer_photo(
+            BufferedInputFile(image_bytes, filename="image.png"),
+            caption=f"✅ Готово! Осталось: *{remaining} генераций*\n\n🏠 Ещё сцена — /scene",
+            parse_mode="Markdown"
+        )
+    except Exception as e:
+        logger.error(f"[{user_id}] Ошибка scene mode: {e}", exc_info=True)
+        await message.answer(f"❌ Ошибка:\n`{str(e)[:300]}`", parse_mode="Markdown")
+    finally:
+        await state.clear()
+
+
+# ===================== Конец режима «Товар без человека» =====================
+
+
 @dp.message()
 async def handle_message(message: types.Message, state: FSMContext):
     user_id = message.from_user.id
