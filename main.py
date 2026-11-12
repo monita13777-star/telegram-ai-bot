@@ -131,6 +131,21 @@ def detect_image_size(prompt: str) -> tuple[str, str]:
     return "square_hd", "1024x1024"
 
 
+def detect_aspect_ratio(prompt: str) -> str:
+    """Формат кадра для текстовой генерации Nano Banana."""
+    prompt_lower = prompt.lower()
+    # Если формат прямо указан в тексте — используем его
+    for explicit in ("9:16", "3:4", "4:5", "2:3"):
+        if explicit in prompt_lower:
+            return explicit
+    _, openai_size = detect_image_size(prompt)
+    if openai_size == "1024x1536":
+        return "2:3"
+    if openai_size == "1536x1024":
+        return "3:2"
+    return "1:1"
+
+
 def model_choice_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🍌 Nano Banana — реалистичнее", callback_data="model_banana")],
@@ -281,15 +296,32 @@ async def generate_with_nano_banana_duo(image_base64_1: str, image_base64_2: str
 
 
 async def generate_text_only(prompt: str) -> bytes:
-    translated_prompt = translate_prompt(prompt)
-    _, openai_size = detect_image_size(prompt + " " + translated_prompt)
-    result = client.images.generate(
-        model="gpt-image-1",
-        prompt=translated_prompt,
-        size=openai_size,
-        quality="high",
-    )
-    return base64.b64decode(result.data[0].b64_json)
+    """Генерация без фото — через Nano Banana (fal.ai), без OpenAI.
+    Промпт сюда приходит уже переведённым, повторно не переводим."""
+    aspect_ratio = detect_aspect_ratio(prompt)
+    async with httpx.AsyncClient(timeout=180) as http:
+        gen_response = await http.post(
+            "https://fal.run/fal-ai/nano-banana",
+            headers={"Authorization": f"Key {FAL_API_KEY}", "Content-Type": "application/json"},
+            json={
+                "prompt": prompt,
+                "num_images": 1,
+                "aspect_ratio": aspect_ratio,
+                "output_format": "png",
+            }
+        )
+        logger.info(f"Nano Banana (текст) статус: {gen_response.status_code}, формат {aspect_ratio}")
+        if gen_response.status_code == 500:
+            raise ValueError("Сервер Nano Banana временно недоступен. Попробуйте ещё раз через минуту.")
+        try:
+            gen_data = gen_response.json()
+        except Exception:
+            raise ValueError(f"Неожиданный ответ Nano Banana: {gen_response.text[:200]}")
+        if "images" not in gen_data:
+            raise ValueError(f"Ошибка Nano Banana: {gen_data}")
+        result_url = gen_data["images"][0]["url"]
+        img_response = await http.get(result_url)
+        return img_response.content
 
 
 async def process_generation(message: types.Message, user_id: int, prompt: str, is_template: bool = False):
