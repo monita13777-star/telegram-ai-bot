@@ -59,6 +59,85 @@ user_model: dict[int, str] = {}
 db_pool = None
 
 
+# ===================== Сетевые запросы к fal.ai с автоповтором =====================
+
+# Общий таймаут: на подключение 30 сек, на ожидание ответа генерации до 5 минут
+HTTP_TIMEOUT = httpx.Timeout(300.0, connect=30.0)
+
+# Коды ответа, при которых имеет смысл повторить запрос
+RETRY_STATUS = (429, 500, 502, 503, 504)
+
+
+class FalTemporaryError(Exception):
+    """Временный сбой на стороне сервера — запрос можно повторить."""
+
+
+# Ошибки, при которых запрос повторяется автоматически (обрыв соединения, таймауты и т.п.)
+RETRY_EXCEPTIONS = (
+    FalTemporaryError,
+    httpx.ReadError,
+    httpx.WriteError,
+    httpx.ConnectError,
+    httpx.ReadTimeout,
+    httpx.WriteTimeout,
+    httpx.ConnectTimeout,
+    httpx.PoolTimeout,
+    httpx.RemoteProtocolError,
+)
+
+
+def fal_headers() -> dict:
+    return {"Authorization": f"Key {FAL_API_KEY}", "Content-Type": "application/json"}
+
+
+async def fal_download(http: httpx.AsyncClient, url: str, retries: int = 3) -> bytes:
+    """Скачивание готовой картинки с повтором при обрыве."""
+    last_error = None
+    for attempt in range(1, retries + 1):
+        try:
+            response = await http.get(url)
+            response.raise_for_status()
+            return response.content
+        except httpx.HTTPError as e:
+            last_error = e
+            logger.warning(f"Скачивание картинки не удалось (попытка {attempt}/{retries}): {repr(e)}")
+            await asyncio.sleep(2 * attempt)
+    raise FalTemporaryError(f"Не удалось скачать результат: {repr(last_error)}")
+
+
+async def fal_generate(url: str, payload: dict, label: str, retries: int = 3) -> bytes:
+    """Отправляет запрос на генерацию в fal.ai.
+    При обрыве соединения, таймауте или ошибке сервера повторяет запрос до 3 раз.
+    Возвращает байты готовой картинки."""
+    last_error = None
+    for attempt in range(1, retries + 1):
+        try:
+            async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as http:
+                response = await http.post(url, headers=fal_headers(), json=payload)
+                logger.info(f"{label} статус: {response.status_code} (попытка {attempt}/{retries})")
+                if response.status_code in RETRY_STATUS:
+                    raise FalTemporaryError(f"HTTP {response.status_code}")
+                try:
+                    data = response.json()
+                except Exception:
+                    raise ValueError(f"Неожиданный ответ {label}: {response.text[:200]}")
+                if "images" not in data:
+                    raise ValueError(f"Ошибка {label}: {data}")
+                return await fal_download(http, data["images"][0]["url"])
+        except RETRY_EXCEPTIONS as e:
+            last_error = e
+            logger.warning(f"{label}: временный сбой (попытка {attempt}/{retries}): {repr(e)}")
+            if attempt < retries:
+                await asyncio.sleep(3 * attempt)
+    logger.error(f"{label}: все попытки исчерпаны, последняя ошибка: {repr(last_error)}")
+    raise ValueError(
+        f"Сервер {label} временно недоступен (обрыв соединения). "
+        "Генерация не списана — попробуйте ещё раз через минуту."
+    )
+
+
+# ===================== База данных =====================
+
 async def init_db():
     global db_pool
     db_pool = await asyncpg.create_pool(DATABASE_URL)
@@ -103,6 +182,8 @@ async def use_credit(user_id: int) -> bool:
         """, user_id)
         return result == "UPDATE 1"
 
+
+# ===================== Вспомогательные функции =====================
 
 def compress_image(image_bytes: bytes, max_size: int = 1024) -> str:
     img = Image.open(BytesIO(image_bytes))
@@ -204,124 +285,75 @@ async def upload_to_fal(image_base64: str) -> str:
     return f"data:image/jpeg;base64,{image_base64}"
 
 
+# ===================== Генерация =====================
+
 async def generate_with_flux_pulid(image_base64: str, prompt: str) -> bytes:
     fal_size, _ = detect_image_size(prompt)
     image_data_uri = f"data:image/jpeg;base64,{image_base64}"
-    async with httpx.AsyncClient(timeout=180) as http:
-        gen_response = await http.post(
-            "https://fal.run/fal-ai/flux-pulid",
-            headers={"Authorization": f"Key {FAL_API_KEY}", "Content-Type": "application/json"},
-            json={
-                "prompt": prompt + ", photorealistic, RAW photo, 8K resolution, sharp focus, natural skin texture, professional photography, cinematic lighting, preserve exact body proportions and figure, same body type as reference photo, do not slim or alter body shape",
-                "reference_image_url": image_data_uri,
-                "num_inference_steps": 30,
-                "guidance_scale": 7,
-                "true_cfg": 1,
-                "id_weight": 1.0,
-                "image_size": fal_size,
-                "num_images": 1,
-            }
-        )
-        logger.info(f"Flux PuLID статус: {gen_response.status_code}")
-        if gen_response.status_code == 500:
-            raise ValueError("Сервер fal.ai временно недоступен. Попробуйте ещё раз через минуту.")
-        try:
-            gen_data = gen_response.json()
-        except Exception:
-            raise ValueError(f"Неожиданный ответ fal.ai: {gen_response.text[:200]}")
-        if "images" not in gen_data:
-            raise ValueError(f"Ошибка fal.ai: {gen_data}")
-        result_url = gen_data["images"][0]["url"]
-        img_response = await http.get(result_url)
-        return img_response.content
+    return await fal_generate(
+        "https://fal.run/fal-ai/flux-pulid",
+        {
+            "prompt": prompt + ", photorealistic, RAW photo, 8K resolution, sharp focus, natural skin texture, professional photography, cinematic lighting, preserve exact body proportions and figure, same body type as reference photo, do not slim or alter body shape",
+            "reference_image_url": image_data_uri,
+            "num_inference_steps": 30,
+            "guidance_scale": 7,
+            "true_cfg": 1,
+            "id_weight": 1.0,
+            "image_size": fal_size,
+            "num_images": 1,
+        },
+        "Flux PuLID",
+    )
 
 
 async def generate_with_nano_banana(image_base64: str, prompt: str) -> bytes:
     image_url = await upload_to_fal(image_base64)
-    async with httpx.AsyncClient(timeout=180) as http:
-        gen_response = await http.post(
-            "https://fal.run/fal-ai/nano-banana/edit",
-            headers={"Authorization": f"Key {FAL_API_KEY}", "Content-Type": "application/json"},
-            json={
-                "prompt": prompt + ". Keep the exact face, age, and appearance of the person from the reference photo. Photorealistic, high quality.",
-                "image_urls": [image_url],
-                "num_images": 1,
-                "aspect_ratio": "auto",
-                "output_format": "png",
-                "safety_tolerance": "4",
-            }
-        )
-        logger.info(f"Nano Banana статус: {gen_response.status_code}")
-        if gen_response.status_code == 500:
-            raise ValueError("Сервер Nano Banana временно недоступен. Попробуйте ещё раз через минуту.")
-        try:
-            gen_data = gen_response.json()
-        except Exception:
-            raise ValueError(f"Неожиданный ответ Nano Banana: {gen_response.text[:200]}")
-        if "images" not in gen_data:
-            raise ValueError(f"Ошибка Nano Banana: {gen_data}")
-        result_url = gen_data["images"][0]["url"]
-        img_response = await http.get(result_url)
-        return img_response.content
+    return await fal_generate(
+        "https://fal.run/fal-ai/nano-banana/edit",
+        {
+            "prompt": prompt + ". Keep the exact face, age, and appearance of the person from the reference photo. Photorealistic, high quality.",
+            "image_urls": [image_url],
+            "num_images": 1,
+            "aspect_ratio": "auto",
+            "output_format": "png",
+            "safety_tolerance": "4",
+        },
+        "Nano Banana",
+    )
 
 
 async def generate_with_nano_banana_duo(image_base64_1: str, image_base64_2: str, prompt: str) -> bytes:
     image_url_1 = await upload_to_fal(image_base64_1)
     image_url_2 = await upload_to_fal(image_base64_2)
-    async with httpx.AsyncClient(timeout=180) as http:
-        gen_response = await http.post(
-            "https://fal.run/fal-ai/nano-banana/edit",
-            headers={"Authorization": f"Key {FAL_API_KEY}", "Content-Type": "application/json"},
-            json={
-                "prompt": prompt + ". Keep the exact faces, ages, and appearances of both people from the reference photos. Two people together. Photorealistic, high quality.",
-                "image_urls": [image_url_1, image_url_2],
-                "num_images": 1,
-                "aspect_ratio": "auto",
-                "output_format": "png",
-                "safety_tolerance": "4",
-            }
-        )
-        logger.info(f"Nano Banana DUO статус: {gen_response.status_code}")
-        if gen_response.status_code == 500:
-            raise ValueError("Сервер Nano Banana временно недоступен. Попробуйте ещё раз через минуту.")
-        try:
-            gen_data = gen_response.json()
-        except Exception:
-            raise ValueError(f"Неожиданный ответ Nano Banana: {gen_response.text[:200]}")
-        if "images" not in gen_data:
-            raise ValueError(f"Ошибка Nano Banana: {gen_data}")
-        result_url = gen_data["images"][0]["url"]
-        img_response = await http.get(result_url)
-        return img_response.content
+    return await fal_generate(
+        "https://fal.run/fal-ai/nano-banana/edit",
+        {
+            "prompt": prompt + ". Keep the exact faces, ages, and appearances of both people from the reference photos. Two people together. Photorealistic, high quality.",
+            "image_urls": [image_url_1, image_url_2],
+            "num_images": 1,
+            "aspect_ratio": "auto",
+            "output_format": "png",
+            "safety_tolerance": "4",
+        },
+        "Nano Banana (парное фото)",
+    )
 
 
 async def generate_text_only(prompt: str) -> bytes:
     """Генерация без фото — через Nano Banana (fal.ai), без OpenAI.
     Промпт сюда приходит уже переведённым, повторно не переводим."""
     aspect_ratio = detect_aspect_ratio(prompt)
-    async with httpx.AsyncClient(timeout=180) as http:
-        gen_response = await http.post(
-            "https://fal.run/fal-ai/nano-banana",
-            headers={"Authorization": f"Key {FAL_API_KEY}", "Content-Type": "application/json"},
-            json={
-                "prompt": prompt,
-                "num_images": 1,
-                "aspect_ratio": aspect_ratio,
-                "output_format": "png",
-            }
-        )
-        logger.info(f"Nano Banana (текст) статус: {gen_response.status_code}, формат {aspect_ratio}")
-        if gen_response.status_code == 500:
-            raise ValueError("Сервер Nano Banana временно недоступен. Попробуйте ещё раз через минуту.")
-        try:
-            gen_data = gen_response.json()
-        except Exception:
-            raise ValueError(f"Неожиданный ответ Nano Banana: {gen_response.text[:200]}")
-        if "images" not in gen_data:
-            raise ValueError(f"Ошибка Nano Banana: {gen_data}")
-        result_url = gen_data["images"][0]["url"]
-        img_response = await http.get(result_url)
-        return img_response.content
+    logger.info(f"Текстовая генерация, формат {aspect_ratio}")
+    return await fal_generate(
+        "https://fal.run/fal-ai/nano-banana",
+        {
+            "prompt": prompt,
+            "num_images": 1,
+            "aspect_ratio": aspect_ratio,
+            "output_format": "png",
+        },
+        "Nano Banana (текст)",
+    )
 
 
 async def process_generation(message: types.Message, user_id: int, prompt: str, is_template: bool = False):
@@ -332,10 +364,11 @@ async def process_generation(message: types.Message, user_id: int, prompt: str, 
 
     model = user_model.get(user_id, "banana")
     model_name = "🍌 Nano Banana" if model == "banana" else "⚡ Flux PuLID"
+    has_photo = user_id in user_photos
     await message.answer(f"⏳ Генерирую [{model_name}]... подожди немного (осталось: {credits})")
 
     try:
-        if user_id in user_photos:
+        if has_photo:
             saved_base64 = user_photos[user_id]
             if model == "banana":
                 image_bytes = await generate_with_nano_banana(saved_base64, prompt)
@@ -359,11 +392,13 @@ async def process_generation(message: types.Message, user_id: int, prompt: str, 
     except Exception as e:
         logger.error(f"[{user_id}] Ошибка: {e}", exc_info=True)
         err = str(e)
-        if "no face detected" in err.lower() or "face" in err.lower():
+        err_low = err.lower()
+        # Сообщение «не найдено лицо» — только для Flux PuLID, у Nano Banana такой проверки нет
+        if model == "flux" and has_photo and "face" in err_low:
             await message.answer("⚠️ Не удалось найти лицо на фото.\n\nПопробуйте другое фото 😊")
-        elif "content_policy" in err.lower() or "safety" in err.lower():
+        elif "content_policy" in err_low or "content policy" in err_low or "nsfw" in err_low:
             await message.answer("⚠️ Запрос нарушает правила контента. Попробуйте переформулировать.")
-        elif "billing" in err.lower() or "quota" in err.lower():
+        elif "billing" in err_low or "quota" in err_low:
             await message.answer("💳 Проблема с балансом. Проверьте аккаунт.")
         elif "временно недоступен" in err:
             await message.answer("⚠️ " + err)
@@ -678,30 +713,18 @@ async def generate_product_image(product_b64: str, model_b64: str, mode: str, sc
     prompt = PRODUCT_PROMPTS[mode]
     if scene:
         prompt += f" Scene and mood: {scene}."
-    async with httpx.AsyncClient(timeout=180) as http:
-        gen_response = await http.post(
-            "https://fal.run/fal-ai/nano-banana/edit",
-            headers={"Authorization": f"Key {FAL_API_KEY}", "Content-Type": "application/json"},
-            json={
-                "prompt": prompt,
-                "image_urls": [product_url, model_url],
-                "num_images": 1,
-                "aspect_ratio": "auto",
-                "output_format": "png",
-                "safety_tolerance": "4",
-            }
-        )
-        logger.info(f"Product mode статус: {gen_response.status_code}")
-        if gen_response.status_code == 500:
-            raise ValueError("Сервер Nano Banana временно недоступен. Попробуйте ещё раз через минуту.")
-        try:
-            gen_data = gen_response.json()
-        except Exception:
-            raise ValueError(f"Неожиданный ответ Nano Banana: {gen_response.text[:200]}")
-        if "images" not in gen_data:
-            raise ValueError(f"Ошибка Nano Banana: {gen_data}")
-        img_response = await http.get(gen_data["images"][0]["url"])
-        return img_response.content
+    return await fal_generate(
+        "https://fal.run/fal-ai/nano-banana/edit",
+        {
+            "prompt": prompt,
+            "image_urls": [product_url, model_url],
+            "num_images": 1,
+            "aspect_ratio": "auto",
+            "output_format": "png",
+            "safety_tolerance": "4",
+        },
+        "Nano Banana (товар)",
+    )
 
 
 async def photo_to_base64(message: types.Message) -> str:
@@ -824,30 +847,18 @@ async def generate_product_scene(product_b64: str, scene: str) -> bytes:
     prompt = SCENE_PROMPT
     if scene:
         prompt += f" Scene and mood: {scene}."
-    async with httpx.AsyncClient(timeout=180) as http:
-        gen_response = await http.post(
-            "https://fal.run/fal-ai/nano-banana/edit",
-            headers={"Authorization": f"Key {FAL_API_KEY}", "Content-Type": "application/json"},
-            json={
-                "prompt": prompt,
-                "image_urls": [product_url],
-                "num_images": 1,
-                "aspect_ratio": "auto",
-                "output_format": "png",
-                "safety_tolerance": "4",
-            }
-        )
-        logger.info(f"Scene mode статус: {gen_response.status_code}")
-        if gen_response.status_code == 500:
-            raise ValueError("Сервер Nano Banana временно недоступен. Попробуйте ещё раз через минуту.")
-        try:
-            gen_data = gen_response.json()
-        except Exception:
-            raise ValueError(f"Неожиданный ответ Nano Banana: {gen_response.text[:200]}")
-        if "images" not in gen_data:
-            raise ValueError(f"Ошибка Nano Banana: {gen_data}")
-        img_response = await http.get(gen_data["images"][0]["url"])
-        return img_response.content
+    return await fal_generate(
+        "https://fal.run/fal-ai/nano-banana/edit",
+        {
+            "prompt": prompt,
+            "image_urls": [product_url],
+            "num_images": 1,
+            "aspect_ratio": "auto",
+            "output_format": "png",
+            "safety_tolerance": "4",
+        },
+        "Nano Banana (сцена)",
+    )
 
 
 @dp.message(Command("scene"))
